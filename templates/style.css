@@ -1,0 +1,122 @@
+/* Main plots & secondary plots */
+.main-container {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 20px;
+    width: 100%;
+}
+.full-image-container {
+    flex: 0 0 auto;
+    text-align: center;
+}
+.colors-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-content: flex-start;
+    gap: 10px;
+    flex: 1 1 auto;
+}
+.plot-container {
+    flex: 0 0 auto;
+    margin: 0;
+    text-align: center;
+}
+@media (max-width: 768px) {
+    .main-container {
+        flex-direction: column;
+    }
+    .colors-container {
+        width: 100%;
+    }
+}
+
+/* Sliders */
+.slider-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    margin: 20px auto;
+    width: 90%;
+    max-width: 800px;
+}
+#slider {
+    flex-grow: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 10px;
+    background: linear-gradient(90deg, #ff8c00, #ff0080);
+    border-radius: 5px;
+    outline: none;
+    opacity: 0.85;
+    transition: opacity 0.2s, height 0.2s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) inset;
+}
+#slider:hover {
+    opacity: 1;
+    height: 12px;
+}
+#slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    background: #fff;
+    border-radius: 50%;
+    border: 2px solid #ff0080;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    transition: all 0.2s;
+}
+#slider::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 3px 7px rgba(0, 0, 0, 0.4);
+}
+#slider::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    background: #fff;
+    border-radius: 50%;
+    border: 2px solid #ff0080;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    transition: all 0.2s;
+}
+#slider::-moz-range-thumb:hover {
+    transform: scale(1.1);
+    box-shadow: 0 3px 7px rgba(0, 0, 0, 0.4);
+}
+
+/* Control buttons styling */
+.control-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: white;
+    border: 2px solid #ff0080;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s ease;
+}
+.control-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 3px 7px rgba(0, 0, 0, 0.3);
+}
+.control-btn:active {
+    transform: scale(0.95);
+}
+.control-btn svg {
+    width: 20px;
+    height: 20px;
+    fill: #ff0080;
+}
+#reset-btn {
+    margin-left: 5px;
+    background: white;
+}
