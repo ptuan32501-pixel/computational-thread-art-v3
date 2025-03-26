@@ -9,13 +9,13 @@ import streamlit as st
 
 # Add parent directory to path so we can import the required modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-st.write(f"Parent directory: {parent_dir}")
-sys.path.insert(0, parent_dir)
-for path in Path(parent_dir).iterdir():
-    st.write(path)
-    if not path.is_file():
-        for subpath in path.iterdir():
-            st.write("sub: ", subpath)
+# st.write(f"Parent directory: {parent_dir}")
+# sys.path.insert(0, parent_dir)
+# for path in Path(parent_dir).iterdir():
+#     st.write(path)
+#     if not path.is_file():
+#         for subpath in path.iterdir():
+#             st.write("sub: ", subpath)
 
 os.chdir(parent_dir)
 
