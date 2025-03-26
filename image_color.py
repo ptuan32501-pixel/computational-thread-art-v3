@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generator, Literal, Optional, Tuple
 
-import cv2
 import einops
 import numpy as np
 import plotly.express as px
