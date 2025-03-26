@@ -414,9 +414,9 @@ with st.sidebar:
     html_line_width = st.slider(
         "Line Width",
         min_value=0.05,
-        max_value=1.0,
+        max_value=0.3,
         value=0.14,
-        step=0.05,
+        step=0.01,
         help="Width of the lines in the output image. Generally this can be kept at 0.14; smaller values mean thinner lines and look better when your images are very large and have a lot of lines.",
     )
     html_width = st.number_input(
