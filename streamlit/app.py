@@ -19,7 +19,7 @@ for path in Path(parent_dir).iterdir():
         for subpath in path.iterdir():
             st.write("sub: ", subpath)
 
-from ..image_color import Img, ThreadArtColorParams
+from .image_color import Img, ThreadArtColorParams
 
 # Set page configuration
 st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="wide", initial_sidebar_state="expanded")
