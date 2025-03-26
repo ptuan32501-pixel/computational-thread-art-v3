@@ -550,7 +550,6 @@ class Img:
         background_color: Tuple[int, int, int] | None = (0, 0, 0),
         show_individual_colors: bool = False,
         color_substitution: dict[str, tuple[int, int, int]] = {},
-        animation: dict[str, int] | None = None,  # lines_per_frame, frame_duration
         line_width_multiplier: float = 1.0,
         png: bool = True,
         verbose: bool = False,
@@ -623,7 +622,6 @@ class Img:
             disable=not verbose,
         )
         line_counter = 0
-        frame_counter = 0
 
         # Get x and y values, and also the coords dict
         if x_output is None:
@@ -686,48 +684,10 @@ class Img:
                     context.line_to(x, y)
 
                     current_node = finishing_node
-
-                    if (animation is not None) and (line_counter % animation["lines_per_frame"] == 0):
-                        context.stroke()
-                        gif_png_filename = str(self.save_dir / f"animation_{frame_counter:03}.png")
-                        surface.write_to_png(gif_png_filename)
-                        frame_counter += 1
-                        progress_bar.update(line_counter - progress_bar.n)
-
                     line_counter += 1
                 progress_bar.update(line_counter - progress_bar.n)
 
                 context.stroke()
-
-            # Loop through all the files used for animations, and save them
-            if animation is not None:
-                png_filenames = sorted(self.save_dir.glob("animation_*.png"))
-
-                # Create gif & mp4
-                progress_bar_2 = tqdm_notebook(total=len(png_filenames), desc="Creating gif")
-                frames_per_second = 1000 / animation["frame_duration"]
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore
-                video_output = cv2.VideoWriter(
-                    str(self.save_dir / f"{img_name}.mp4"),
-                    fourcc,
-                    frames_per_second,
-                    (x_output, y_output),
-                )
-
-                # with imageio.get_writer(str(self.save_dir / f"{img_name}.gif"), mode='I', duration=animation["frame_duration"], loop=0) as writer:
-                for png_file in png_filenames:
-                    progress_bar_2.update(1)
-                    # # Gif stuff
-                    # image = imageio.imread(str(png_file))
-                    # writer.append_data(image) # type: ignore
-                    # Video stuff
-                    frame = cv2.imread(str(png_file))
-                    video_output.write(frame)
-                    # Remove file
-                    png_file.unlink()
-
-                video_output.release()
-                cv2.destroyAllWindows()
 
             # Get a final PNG, if necessary
             if png:
