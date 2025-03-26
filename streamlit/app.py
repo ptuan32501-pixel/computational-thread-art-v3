@@ -7,6 +7,9 @@ from pathlib import Path
 
 import streamlit as st
 
+# Set page configuration
+st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="wide", initial_sidebar_state="expanded")
+
 # Add parent directory to path so we can import the required modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 st.write(f"Parent directory: {parent_dir}")
@@ -21,9 +24,6 @@ os.chdir(parent_dir)
 
 from image_color import Img, ThreadArtColorParams
 from streamlit.components.v1 import html as st_html
-
-# Set page configuration
-st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="wide", initial_sidebar_state="expanded")
 
 # Apply custom CSS for a clean, minimalist look
 st.markdown(
