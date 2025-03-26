@@ -10,11 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generator, Literal, Optional, Tuple
 
-import cairo
 import cv2
 import einops
 import numpy as np
-import pandas as pd
 import plotly.express as px
 import torch as t
 from IPython.display import HTML, clear_output, display
@@ -644,6 +642,8 @@ class Img:
 
         # Deal with case where img_name had a fwd slash in it
         img_name = self.args.name.split("/")[-1]
+
+        import cairo
 
         with cairo.SVGSurface(str(self.save_dir / f"{img_name}.svg"), x_output, y_output) as surface:
             context = cairo.Context(surface)
