@@ -12,6 +12,13 @@ st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="
 
 # Add parent directory to path so we can import the required modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
+# for path in Path(parent_dir).iterdir():
+#     st.write(path)
+#     if not path.is_file():
+#         for subpath in path.iterdir():
+#             st.write("sub: ", subpath)
+
 os.chdir(parent_dir)
 
 from image_color import Img, ThreadArtColorParams
