@@ -6,20 +6,21 @@ from collections import defaultdict
 from pathlib import Path
 
 import streamlit as st
-from streamlit.components.v1 import html as st_html
 
 # Add parent directory to path so we can import the required modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 st.write(f"Parent directory: {parent_dir}")
 sys.path.insert(0, parent_dir)
-
 for path in Path(parent_dir).iterdir():
     st.write(path)
     if not path.is_file():
         for subpath in path.iterdir():
             st.write("sub: ", subpath)
 
-from .image_color import Img, ThreadArtColorParams
+os.chdir(parent_dir)
+
+from image_color import Img, ThreadArtColorParams
+from streamlit.components.v1 import html as st_html
 
 # Set page configuration
 st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="wide", initial_sidebar_state="expanded")
