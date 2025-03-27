@@ -57,6 +57,10 @@ st.markdown(
 # Header
 st.title("Thread Art Generator")
 st.markdown("Create beautiful thread art from images with customizable parameters.")
+st.markdown("You can upload your own image and select parameters using the menu on the left.")
+st.markdown(
+    "You can also choose a demo image to set the image & parameters, and scroll down to the 'Generate Thread Art' button to get started right away!"
+)
 
 # Initialize session state
 if "generated_html" not in st.session_state:
@@ -73,7 +77,7 @@ demo_presets = {
         "filename": "tiger.jpg",
         "name": "tiger_small_01",
         "x": 640,
-        "nodes": 380,
+        "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 150,
         "darkness": {
@@ -91,15 +95,15 @@ demo_presets = {
             "black": [0, 0, 0],
         },
         "lines": [3000, 2200, 700, 5500],
-        "html_x": 700,
+        "html_x": 800,
     },
     "Tiger Demo (medium)": {
         "filename": "tiger.jpg",
         "name": "tiger_medium_01",
-        "x": 720,
-        "nodes": 440,
+        "x": 670,
+        "nodes": 400,
         "shape": "Rectangle",
-        "random_lines": 200,
+        "random_lines": 175,
         "darkness": {
             "black": 0.12,
             "white": 0.12,
@@ -115,20 +119,20 @@ demo_presets = {
             "black": [0, 0, 0],
         },
         "lines": [3000, 2800, 1200, 7000],
-        "html_x": 750,
+        "html_x": 850,
     },
     "Tiger Demo (slow)": {
         "filename": "tiger.jpg",
         "name": "tiger_big_01",
-        "x": 770,
-        "nodes": 480,
+        "x": 700,
+        "nodes": 450,
         "shape": "Rectangle",
-        "random_lines": 300,
+        "random_lines": 200,
         "darkness": {
-            "black": 0.12,
-            "white": 0.12,
-            "orange": 0.12,
-            "red": 0.12,
+            "black": 0.13,
+            "white": 0.13,
+            "orange": 0.13,
+            "red": 0.13,
         },
         "blur": 4,
         "group_orders": "worb" * 8,
@@ -138,8 +142,8 @@ demo_presets = {
             "red": [255, 0, 0],
             "black": [0, 0, 0],
         },
-        "lines": [8000, 6000, 3000, 14000],
-        "html_x": 800,
+        "lines": [7000, 5200, 2500, 12000],
+        "html_x": 900,
     },
     "Stag Demo (fast)": {
         "filename": "stag-large.jpg",
@@ -293,10 +297,6 @@ demo_presets = {
 # Sidebar for parameters
 with st.sidebar:
     st.header("Parameters")
-    st.caption("Upload your own image and select parameters using the menu below.")
-    st.caption(
-        "You can also choose a demo image to set the image & parameters, and scroll down to the 'Generate Thread Art' button to get started right away!"
-    )
 
     images = {
         "uploaded": None,
@@ -600,6 +600,10 @@ if generate_button:
         st.session_state.output_name = name
 
         st.success(f"Thread art '{name}' generated successfully!")
+
+        del args
+        del my_img
+        del line_dict
 
     except Exception as e:
         st.error(f"Error generating thread art: {str(e)}")
