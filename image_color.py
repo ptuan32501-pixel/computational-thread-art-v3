@@ -33,6 +33,8 @@ from misc import (
     palette_to_html,
 )
 
+t.classes.__path__ = []
+
 ROOT_PATH = Path(__file__).parent
 assert (ROOT_PATH / "images").exists(), f"{ROOT_PATH / 'images'} folder not found in the same directory as this file."
 

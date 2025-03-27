@@ -20,6 +20,8 @@ from rich.progress import (
 )
 from torch import Tensor
 
+t.classes.__path__ = []
+
 
 def mask_ellipse(tensor: Tensor, mask_value: float) -> Tensor:
     rows, cols = tensor.shape[:2]
