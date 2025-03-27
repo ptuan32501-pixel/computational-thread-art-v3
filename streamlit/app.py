@@ -72,21 +72,31 @@ demo_presets = {
     "Tiger Demo (fast)": {
         "filename": "tiger.jpg",
         "name": "tiger_small",
-        "x": 770,
+        "x": 640,
         "nodes": 380,
         "shape": "Rectangle",
         "random_lines": 150,
-        "darkness": {"white": 0.17, "orange": 0.17, "red": 0.17, "black": 0.17},
+        "darkness": {
+            "white": 0.15,
+            "orange": 0.15,
+            "red": 0.15,
+            "black": 0.15,
+        },
         "blur": 4,
         "group_orders": "worb" * 5,
-        "palette": {"white": [255, 255, 255], "orange": [255, 130, 0], "red": [255, 0, 0], "black": [0, 0, 0]},
+        "palette": {
+            "white": [255, 255, 255],
+            "orange": [255, 130, 0],
+            "red": [255, 0, 0],
+            "black": [0, 0, 0],
+        },
         "lines": [3000, 2200, 700, 5500],
         "html_x": 700,
     },
     "Tiger Demo (medium)": {
         "filename": "tiger.jpg",
         "name": "tiger_medium",
-        "x": 770,
+        "x": 720,
         "nodes": 440,
         "shape": "Rectangle",
         "random_lines": 200,
@@ -114,11 +124,17 @@ demo_presets = {
     "Stag Demo (fast)": {
         "filename": "stag-large.jpg",
         "name": "stag_small",
-        "x": 1600,  # TODO - make this and others smaller
+        "x": 1200,
         "nodes": 420,
         "shape": "Rectangle",
         "random_lines": 300,
-        "darkness": {"white": 0.16, "light_blue": 0.16, "mid_blue": 0.12, "dark_blue": 0.14, "black": 0.12},
+        "darkness": {
+            "white": 0.14,
+            "light_blue": 0.14,
+            "mid_blue": 0.11,
+            "dark_blue": 0.13,
+            "black": 0.11,
+        },
         "blur": 4,
         "group_orders": "wdlbwdmlbwdmlbmb",
         "palette": {
@@ -128,17 +144,23 @@ demo_presets = {
             "dark_blue": [0, 0, 120],
             "black": [0, 0, 0],
         },
-        "lines": [1600, 1100, 800, 3200, 7700],
+        "lines": [1500, 1000, 750, 3000, 7000],
         "html_x": 1100,
     },
     "Stag Demo (slow)": {
         "filename": "stag.jpg",
         "name": "stag_large",
-        "x": 1700,
+        "x": 1400,
         "nodes": 480,
         "shape": "Rectangle",
         "random_lines": 250,
-        "darkness": {"white": 0.15, "light_blue": 0.14, "mid_blue": 0.11, "dark_blue": 0.11, "black": 0.11},
+        "darkness": {
+            "white": 0.14,
+            "light_blue": 0.13,
+            "mid_blue": 0.10,
+            "dark_blue": 0.10,
+            "black": 0.10,
+        },
         "blur": 4,
         "group_orders": "wdlbwdmlbwdmlbmb",
         "palette": {
@@ -148,7 +170,7 @@ demo_presets = {
             "dark_blue": [0, 0, 120],
             "black": [0, 0, 0],
         },
-        "lines": [1800, 1000, 900, 3500, 8500],
+        "lines": [1600, 900, 850, 3300, 8000],
         "html_x": 1200,
     },
     "Duck Demo": {
@@ -282,7 +304,7 @@ with st.sidebar:
         x_size = st.number_input(
             "Width",
             min_value=100,
-            max_value=800,
+            max_value=1400,
             value=preset_x or 600,
         )
 
