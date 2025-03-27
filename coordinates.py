@@ -336,4 +336,5 @@ def build_through_pixels_dict(
         t_pixels[i, j, :, : pixels.size(1)] = pixels
         t_pixels[j, i, :, : pixels.size(1)] = pixels
 
-    return d_coords, d_pixels, d_joined, d_sides, t_pixels
+    del d_pixels
+    return d_coords, d_joined, d_sides, t_pixels

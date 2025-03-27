@@ -80,7 +80,7 @@ demo_presets = {
         "x": 640,
         "nodes": 360,
         "shape": "Rectangle",
-        "random_lines": 150,
+        "random_lines": 140,
         "darkness": {
             "white": 0.15,
             "orange": 0.15,
@@ -104,7 +104,7 @@ demo_presets = {
         "x": 670,
         "nodes": 400,
         "shape": "Rectangle",
-        "random_lines": 175,
+        "random_lines": 160,
         "darkness": {
             "black": 0.12,
             "white": 0.12,
@@ -128,7 +128,7 @@ demo_presets = {
         "x": 700,
         "nodes": 450,
         "shape": "Rectangle",
-        "random_lines": 200,
+        "random_lines": 180,
         "darkness": {
             "black": 0.13,
             "white": 0.13,
@@ -143,7 +143,7 @@ demo_presets = {
             "red": [255, 0, 0],
             "black": [0, 0, 0],
         },
-        "lines": [7000, 5200, 2500, 12000],
+        "lines": [5400, 4000, 2000, 9500],
         "html_x": 800,
     },
     "Stag Demo (fast)": {

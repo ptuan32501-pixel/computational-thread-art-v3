@@ -55,7 +55,7 @@ class ThreadArtColorParams:
     mono_filenames: dict[str, str] = field(default_factory=dict)
     palette_restriction: dict = field(default_factory=dict)
     d_coords: dict = field(default_factory=dict)
-    d_pixels: dict = field(default_factory=dict)
+    # d_pixels: dict = field(default_factory=dict) # Replaced with `t_pixels`
     d_joined: dict = field(default_factory=dict)
     d_sides: dict = field(default_factory=dict)
     t_pixels: Tensor = field(default_factory=lambda: Tensor())
@@ -87,7 +87,7 @@ class ThreadArtColorParams:
         else:
             self.shape = "Rectangle"
 
-        self.d_coords, self.d_pixels, self.d_joined, self.d_sides, self.t_pixels = build_through_pixels_dict(
+        self.d_coords, self.d_joined, self.d_sides, self.t_pixels = build_through_pixels_dict(
             self.x,
             self.y,
             self.n_nodes,
@@ -100,7 +100,6 @@ class ThreadArtColorParams:
         # Print the estimated size in MB of each dictionary
         sizes = {
             "d_coords": get_size_mb(self.d_coords),
-            "d_pixels": get_size_mb(self.d_pixels),
             "d_joined": get_size_mb(self.d_joined),
             "d_sides": get_size_mb(self.d_sides),
             "t_pixels": get_size_mb(self.t_pixels),
@@ -203,7 +202,7 @@ class Img:
         # ! Create the mono images dict
         # Note, most colors will come from dithering `self.imageRGB`, but we also support some mono images coming from
         # images specifically provided for this purpose: `self.imagesMono`
-        self.generate_mono_images_dict(args.d_pixels, self.args.other_colors_weighting)
+        self.generate_mono_images_dict(self.args.other_colors_weighting)
 
         print(f"Other init operations complete in {time.time() - t0 - t_FS:.2f} seconds")
 
@@ -403,13 +402,28 @@ class Img:
         fig.show()
 
     # Takes FS output and returns a dictionary of monochromatic images (called in __init__)
-    def generate_mono_images_dict(self, d_pixels, other_colors_weighting: dict[str, dict[str, float]]):
-        # Gets the pixels which are actually relevant (i.e. just taking the ones in the d_pixels dict)
-        boolean_mask = t.zeros(size=self.image_dithered.shape[:-1])
-        pixels_y_all, pixels_x_all = list(zip(*d_pixels.values()))
-        pixels_y_all = t.concat(pixels_y_all).long()
-        pixels_x_all = t.concat(pixels_x_all).long()
-        boolean_mask[pixels_y_all, pixels_x_all] = 1
+    def generate_mono_images_dict(
+        self,
+        # t_pixels: Float[Tensor, "n_lines 2 pixels"],
+        other_colors_weighting: dict[str, dict[str, float]],
+    ):
+        # # Gets the pixels which are actually relevant (i.e. just taking the ones in the d_pixels dict)
+        # # > Update - we're not doing this any more because it's not worth it
+        # boolean_mask = t.zeros(size=self.image_dithered.shape[:-1])
+        # # pixels_y_all, pixels_x_all = list(zip(*d_pixels.values()))
+        # # pixels_y_all = t.concat(pixels_y_all).long()
+        # # pixels_x_all = t.concat(pixels_x_all).long()
+        # pixels_all = einops.rearrange(t_pixels, "p0 p1 yx pixels -> yx (p0 p1 pixels)")
+        # pixels_all = pixels_all[
+        #     :,
+        #     (pixels_all[0, :] < self.y)
+        #     & (pixels_all[0, :] >= 0)
+        #     & (pixels_all[1, :] < self.x)
+        #     & (pixels_all[1, :] >= 0),
+        # ]
+        # pixels_y_all, pixels_x_all = pixels_all.int()
+        # boolean_mask[pixels_y_all, pixels_x_all] = 1
+        boolean_mask = t.ones(size=self.image_dithered.shape[:-1])
 
         d_histogram = dict()  # histogram of frequency of colors (cropped to a circle if necessary)
         d_mono_images_pre = dict()  # mono-color images, before they've been processed
@@ -531,7 +545,6 @@ class Img:
                         darkness=darkness_dict[color_name],
                         d_joined=self.args.d_joined,
                         t_pixels=self.args.t_pixels,
-                        # d_pixels=self.args.d_pixels,
                     )
                     # > line_dict[color_name].append((i, j))
                     yield color_name, i, j
@@ -875,9 +888,7 @@ def choose_and_subtract_best_line(
     n_random_lines: int | Literal["all"],
     darkness: float,
     d_joined: dict[int, list[int]],
-    t_pixels: Tensor | None = None,
-    d_pixels: dict[tuple[int, int], Int[Tensor, "2 len"]] | None = None,
-    # TODO - maybe use d_pixels instead?
+    t_pixels: Float[Tensor, "n_lines 2 pixels"],
 ) -> int:
     """
     Generates a bunch of random lines (choosing them from `d_joined` which is a dictionary mapping node ints to all the
@@ -899,7 +910,7 @@ def choose_and_subtract_best_line(
     n_lines = j_choices.size(0)
 
     # Get the pixels in the line, and rearrange it
-    coords_yx = t_pixels[i, j_choices.tolist()].long()  # [n_lines 2 pixels]
+    coords_yx = t_pixels[i, j_choices.tolist()].int()  # [n_lines 2 pixels]
     is_zero = coords_yx.sum(dim=1) == 0  # [n_lines pixels]
     coords_yx = einops.rearrange(coords_yx, "j yx pixels -> yx (j pixels)")  # [2 n_lines*pixels]
 
@@ -923,7 +934,7 @@ def choose_and_subtract_best_line(
     best_j = j_choices[scores.argmax()].item()
     assert isinstance(best_j, int)
 
-    coords_yx = t_pixels[i, best_j].long()  # [yx=2 pixels]
+    coords_yx = t_pixels[i, best_j].int()  # [yx=2 pixels]
     is_zero = coords_yx.sum(0) == 0  # [pixels]
     coords_yx = coords_yx[:, ~is_zero]
     m_image[coords_yx[0], coords_yx[1]] -= darkness
