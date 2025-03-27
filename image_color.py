@@ -15,7 +15,7 @@ import numpy as np
 import plotly.express as px
 import torch as t
 from IPython.display import HTML, clear_output, display
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from PIL import Image, ImageFilter
 from rich import print as rprint
 from rich.table import Table
@@ -27,6 +27,7 @@ from coordinates import build_through_pixels_dict
 from misc import (
     get_color_hash,
     get_img_hash,
+    get_size_mb,
     global_random_seed,
     mask_ellipse,
     myprogress,
@@ -95,6 +96,20 @@ class ThreadArtColorParams:
             only_return_d_coords=False,
             width_to_gap_ratio=1,
         )
+
+        # Print the estimated size in MB of each dictionary
+        sizes = {
+            "d_coords": get_size_mb(self.d_coords),
+            "d_pixels": get_size_mb(self.d_pixels),
+            "d_joined": get_size_mb(self.d_joined),
+            "d_sides": get_size_mb(self.d_sides),
+            "t_pixels": get_size_mb(self.t_pixels),
+        }
+        print("\nObject sizes in MB:")
+        print("-" * 30)
+        for obj_name, size in sizes.items():
+            print(f"{obj_name}: {size:.4f} MB")
+        print(f"Total: {sum(sizes.values()):.4f} MB")
 
     def __repr__(self):
         for k, v in self.__dict__.items():
@@ -516,6 +531,7 @@ class Img:
                         darkness=darkness_dict[color_name],
                         d_joined=self.args.d_joined,
                         t_pixels=self.args.t_pixels,
+                        # d_pixels=self.args.d_pixels,
                     )
                     # > line_dict[color_name].append((i, j))
                     yield color_name, i, j
@@ -859,12 +875,15 @@ def choose_and_subtract_best_line(
     n_random_lines: int | Literal["all"],
     darkness: float,
     d_joined: dict[int, list[int]],
-    t_pixels: Tensor,
+    t_pixels: Tensor | None = None,
+    d_pixels: dict[tuple[int, int], Int[Tensor, "2 len"]] | None = None,
+    # TODO - maybe use d_pixels instead?
 ) -> int:
     """
     Generates a bunch of random lines (choosing them from `d_joined` which is a dictionary mapping node ints to all the
     nodes they're connected to), picks the best line, subtracts its darkness from the image, and returns that line.
     """
+
     # Choose `j` random lines
     if isinstance(n_random_lines, int):
         if n_random_lines < len(d_joined[i]):

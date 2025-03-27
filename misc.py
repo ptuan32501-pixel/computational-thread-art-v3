@@ -2,6 +2,7 @@
 Includes all functions hard to categorise elsewhere
 """
 
+import sys
 from functools import reduce
 
 import numpy as np
@@ -327,3 +328,20 @@ def myprogress(verbose: bool):
         TimeRemainingColumn(),
         disable=not verbose,
     )
+
+
+def get_size_mb(obj) -> float:
+    """Calculate size of an object in MB"""
+    if obj is None:
+        return 0.0
+    elif isinstance(obj, t.Tensor):
+        # For PyTorch tensors
+        return obj.element_size() * obj.nelement() / (1024 * 1024)
+    elif isinstance(obj, np.ndarray):
+        # For NumPy arrays
+        return obj.nbytes / (1024 * 1024)
+    elif isinstance(obj, (dict, list, set, tuple)):
+        iterator = obj.values() if isinstance(obj, dict) else obj
+        return sum(get_size_mb(v) for v in iterator)
+    else:
+        return sys.getsizeof(obj) / (1024 * 1024)

@@ -1,4 +1,5 @@
 import base64
+import gc
 import os
 import sys
 import tempfile
@@ -95,7 +96,7 @@ demo_presets = {
             "black": [0, 0, 0],
         },
         "lines": [3000, 2200, 700, 5500],
-        "html_x": 800,
+        "html_x": 700,
     },
     "Tiger Demo (medium)": {
         "filename": "tiger.jpg",
@@ -119,7 +120,7 @@ demo_presets = {
             "black": [0, 0, 0],
         },
         "lines": [3000, 2800, 1200, 7000],
-        "html_x": 850,
+        "html_x": 750,
     },
     "Tiger Demo (slow)": {
         "filename": "tiger.jpg",
@@ -143,7 +144,7 @@ demo_presets = {
             "black": [0, 0, 0],
         },
         "lines": [7000, 5200, 2500, 12000],
-        "html_x": 900,
+        "html_x": 800,
     },
     "Stag Demo (fast)": {
         "filename": "stag-large.jpg",
@@ -307,6 +308,7 @@ with st.sidebar:
     def reset():
         st.session_state.generated_html = None
         st.session_state.output_name = None
+        st.session_state.sf = None
 
     # Demo selector
     demo_option = st.selectbox(
@@ -373,6 +375,7 @@ with st.sidebar:
         value=preset_nodes or 500,
         help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
     )
+    n_nodes_real = n_nodes + (4 - n_nodes % 4)  # Ensure n_nodes is a multiple of 4
 
     shape = st.selectbox(
         "Shape",
@@ -475,7 +478,7 @@ with st.sidebar:
             lines = st.number_input(
                 "Lines",
                 min_value=100,
-                max_value=10000,
+                max_value=15000,
                 value=n_lines[i],
                 key=f"lines_{i}",
                 help="The total number of lines we'll draw for this color. Make sure this is larger for the darker colors, but other than that it should roughly be in proportion with the color density in your reference image.",
@@ -560,7 +563,7 @@ if generate_button:
             args = ThreadArtColorParams(
                 name=name,
                 x=x_size,
-                n_nodes=n_nodes,
+                n_nodes=n_nodes_real,
                 filename=str(image_path),
                 w_filename=w_filename,
                 palette=palette,
@@ -595,15 +598,18 @@ if generate_button:
             bg_color=(0, 0, 0),
         )
 
-        # Store the generated HTML
+        # Success message
+        st.success(f"Thread art '{name}' generated successfully!")
+
+        # Store the generated HTML, and delete what we don't need any more
         st.session_state.generated_html = html_content
         st.session_state.output_name = name
-
-        st.success(f"Thread art '{name}' generated successfully!")
+        st.session_state.sf = my_img.y / my_img.x
 
         del args
         del my_img
         del line_dict
+        gc.collect()
 
     except Exception as e:
         st.error(f"Error generating thread art: {str(e)}")
@@ -617,8 +623,8 @@ if st.session_state.generated_html:
     st.header("Generated Thread Art")
 
     # Display the HTML output
-    html_height = html_width * (my_img.y / my_img.x)
-    st_html(st.session_state.generated_html, height=html_height + 100, scrolling=True)
+    html_height = html_width * st.session_state.sf
+    st_html(st.session_state.generated_html, height=html_height + 150, scrolling=True)
 
     # Download options
     st.subheader("Download Options")

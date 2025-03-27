@@ -228,7 +228,7 @@ def build_through_pixels_dict(
                     if δ < 0:
                         pixels[1] = -pixels[1]
                     pixels[1] += (n2 - i_) * xd
-                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).long()
+                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).int()
 
                 # === then, check if they're opposite horizontal, if so then populate using the archetypes ===
                 elif (d_sides[i], d_sides[j]) == (0, 2):
@@ -238,7 +238,7 @@ def build_through_pixels_dict(
                     if δ < 0:
                         pixels[0] = -pixels[0]
                     pixels[0] += (n1 - i) * yd
-                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).long()
+                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).int()
 
                 # === finally, the diagonal case ===
                 else:
@@ -276,7 +276,7 @@ def build_through_pixels_dict(
                     if y_side == 0:
                         pixels[1] = x - pixels[1]
 
-                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).long()
+                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).int()
 
                 progress_bar.update(1)
 
@@ -331,7 +331,7 @@ def build_through_pixels_dict(
     # =============== populate the tensor ===============
 
     max_pixels = max([pixels.size(1) for pixels in d_pixels.values()])
-    t_pixels = t.zeros((n_nodes, n_nodes, 2, max_pixels), dtype=t.int)
+    t_pixels = t.zeros((n_nodes, n_nodes, 2, max_pixels), dtype=t.int16)
     for (i, j), pixels in d_pixels.items():
         t_pixels[i, j, :, : pixels.size(1)] = pixels
         t_pixels[j, i, :, : pixels.size(1)] = pixels
