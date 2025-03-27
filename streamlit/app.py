@@ -303,11 +303,17 @@ with st.sidebar:
         "demo": None,
     }
 
+    # We need to reset stored HTML when this changes
+    def reset():
+        st.session_state.generated_html = None
+        st.session_state.output_name = None
+
     # Demo selector
     demo_option = st.selectbox(
         "Choose a demo or create your own",
         demo_presets.keys(),
         help="Select a demo to try out the thread art generator with preset parameters. Some of the demos are labelled with (fast) or (long) to indicate how long they will take to generate - the (long) images are larger and more detailed.",
+        on_change=reset,
     )
 
     preset_filename = demo_presets[demo_option].get("filename", None)
@@ -483,7 +489,7 @@ with st.sidebar:
                 value=darkness_values[i],
                 key=f"darkness_{i}",
                 step=0.01,
-                help="The float value we'll subtract from pixels after each line is drawn (maximum darkness = 1.0). The smaller this is, the higher the contrast (because more lines will be required for the darkest areas before we move to the lighter ones).",
+                help="The float value we'll subtract from pixels after each line is drawn (maximum-darkness pixels start at the value of 1.0). Smaller values here mean higher contrast (because we put more lines in the dark areas before moving to the light areas).",
             )
 
         new_colors.append(color_name)
