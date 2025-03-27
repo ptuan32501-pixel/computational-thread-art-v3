@@ -259,7 +259,7 @@ with st.sidebar:
     )
 
     preset_filename = demo_presets[demo_option].get("filename", None)
-    preset_name = demo_presets[demo_option].get("name", Non_01e)
+    preset_name = demo_presets[demo_option].get("name", None)
     preset_x = demo_presets[demo_option].get("x", None)
     preset_html_x = demo_presets[demo_option].get("html_x", None)
     preset_nodes = demo_presets[demo_option].get("nodes", None)
