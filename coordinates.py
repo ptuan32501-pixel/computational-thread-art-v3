@@ -10,19 +10,13 @@ from jaxtyping import Float, Int
 from torch import Tensor
 from tqdm import tqdm
 
+t.classes.__path__ = []
+
 # ================================================================
 
 
-@overload
-def get_distance(p0: np.ndarray, p1: np.ndarray, return_δ: bool = False) -> float: ...
-
-
-@overload
-def get_distance(p0: np.ndarray, p1: np.ndarray, return_δ: bool = True) -> tuple: ...
-
-
 # Returns distance between two points
-def get_distance(p0: np.ndarray, p1: np.ndarray, return_δ: bool = False):
+def get_distance(p0: np.ndarray, p1: np.ndarray):
     """
     Given two coordinates, returns distance between them
     """
@@ -30,7 +24,8 @@ def get_distance(p0: np.ndarray, p1: np.ndarray, return_δ: bool = False):
     δ = np.subtract(p1, p0)
     distance = (δ**2).sum() ** 0.5
 
-    return (distance, δ / distance) if return_δ else distance
+    return distance
+    # return (distance, δ / distance) if return_δ else distance
 
 
 # Truncates a single pair of coordinates, to make sure that none are outside the bounds of the image (used in `build_through_pixels_dict` function)

@@ -260,7 +260,13 @@ def generate_instructions_pdf(
         true_y = image_y * sf
         for color_name, lines in line_dict.items():
             total_distance = sum(
-                [get_distance(img.args.d_coords[line[0]], img.args.d_coords[line[1]]) for line in lines]
+                [
+                    get_distance(
+                        p0=img.args.d_coords[line[0]],
+                        p1=img.args.d_coords[line[1]],
+                    )
+                    for line in lines
+                ]
             )
             print(f"{color_name:{max_colorname_len}} | {total_distance * sf / 1000:.2f} km")
 
@@ -277,7 +283,10 @@ def generate_instructions_pdf(
         for color_name, lines in line_dict.items():
             df_dicts[color_name] = [0 for i in range(n_buckets + 1)]
             for line in lines:
-                line_len = get_distance(img.args.d_coords[line[0]], img.args.d_coords[line[1]])
+                line_len = get_distance(
+                    p0=img.args.d_coords[line[0]],
+                    p1=img.args.d_coords[line[1]],
+                )
                 true_area_covered_by_thread += (line_len * (sf * 1000)) * true_thread_diameter
                 line_len_bucketed = int(line_len * n_buckets / max_len)
                 df_dicts[color_name][line_len_bucketed] += 1

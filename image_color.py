@@ -34,7 +34,6 @@ from misc import (
 )
 
 t.classes.__path__ = []
-
 ROOT_PATH = Path(__file__).parent
 assert (ROOT_PATH / "images").exists(), f"{ROOT_PATH / 'images'} folder not found in the same directory as this file."
 
@@ -138,8 +137,6 @@ class Img:
         self.args = args
         self.filename = ROOT_PATH / f"images/{args.filename}"
         self.save_dir = ROOT_PATH / "outputs" / args.name
-        if not self.save_dir.exists():
-            self.save_dir.mkdir()
         self.x = args.x
         self.y = args.y
         self.palette = {color_name: tuple(color_value) for color_name, color_value in args.palette.items()}
@@ -566,6 +563,8 @@ class Img:
         Takes the line_dict, and uses it to create an svg of the output, then saves it
         """
         t0 = time.time()
+        if not self.save_dir.exists():
+            self.save_dir.mkdir()
 
         # if fraction != (0, 1), it means you're not plotting all the lines, only a subset of them - useful to see how many lines are actually needed to make the image look good
         # precise syntax: fraction = (a, b) means you're plotting between the a and bth lines, e.g. (0, 0.5) means the best half

@@ -71,9 +71,9 @@ demo_presets = {
     "Custom": {},
     "Tiger Demo (fast)": {
         "filename": "tiger.jpg",
-        "name": "tiger_small_01",
+        "name": "tiger_small",
         "x": 770,
-        "nodes": 500,
+        "nodes": 380,
         "shape": "Rectangle",
         "random_lines": 150,
         "darkness": {"white": 0.17, "orange": 0.17, "red": 0.17, "black": 0.17},
@@ -85,9 +85,9 @@ demo_presets = {
     },
     "Tiger Demo (medium)": {
         "filename": "tiger.jpg",
-        "name": "tiger_medium_01",
+        "name": "tiger_medium",
         "x": 770,
-        "nodes": 500,
+        "nodes": 440,
         "shape": "Rectangle",
         "random_lines": 200,
         "darkness": {"black": 0.12, "white": 0.12, "orange": 0.14, "red": 0.14},
@@ -99,9 +99,9 @@ demo_presets = {
     },
     "Tiger Demo (slow)": {
         "filename": "tiger.jpg",
-        "name": "tiger_big_01",
+        "name": "tiger_big",
         "x": 770,
-        "nodes": 500,
+        "nodes": 480,
         "shape": "Rectangle",
         "random_lines": 300,
         "darkness": 0.12,
@@ -114,8 +114,8 @@ demo_presets = {
     "Stag Demo (fast)": {
         "filename": "stag-large.jpg",
         "name": "stag_small",
-        "x": 1600,
-        "nodes": 500,
+        "x": 1600,  # TODO - make this and others smaller
+        "nodes": 420,
         "shape": "Rectangle",
         "random_lines": 300,
         "darkness": {"white": 0.16, "light_blue": 0.16, "mid_blue": 0.12, "dark_blue": 0.14, "black": 0.12},
@@ -133,9 +133,9 @@ demo_presets = {
     },
     "Stag Demo (slow)": {
         "filename": "stag.jpg",
-        "name": "stag_large_01",
+        "name": "stag_large",
         "x": 1700,
-        "nodes": 500,
+        "nodes": 480,
         "shape": "Rectangle",
         "random_lines": 250,
         "darkness": {"white": 0.15, "light_blue": 0.14, "mid_blue": 0.11, "dark_blue": 0.11, "black": 0.11},
@@ -153,9 +153,9 @@ demo_presets = {
     },
     "Duck Demo": {
         "filename": "duck.jpg",
-        "name": "duck_01",
+        "name": "duck",
         "x": 660,
-        "nodes": 500,
+        "nodes": 440,
         "shape": "Rectangle",
         "random_lines": 150,
         "darkness": {"white": 0.12, "yellow": 0.12, "red": 0.12, "black": 0.12},
@@ -167,7 +167,7 @@ demo_presets = {
     },
     "Fish Demo": {
         "filename": "fish_sq_2.jpg",
-        "name": "fish_01",
+        "name": "fish",
         "x": 1600,
         "nodes": 420,
         "shape": "Ellipse",
@@ -181,9 +181,9 @@ demo_presets = {
     },
     "Snake Demo": {
         "filename": "snake.png",
-        "name": "snake_01",
+        "name": "snake",
         "x": 1400,
-        "nodes": 640,
+        "nodes": 480,
         "shape": "Rectangle",
         "random_lines": 200,
         "darkness": {"white": 0.12, "yellow": 0.12, "red": 0.12, "black": 0.14},
@@ -195,9 +195,9 @@ demo_presets = {
     },
     "Planets Demo": {
         "filename": "planets-1-Ga.png",
-        "name": "planets_01",
+        "name": "planets",
         "x": 1500,
-        "nodes": 500,
+        "nodes": 440,
         "shape": "Rectangle",
         "random_lines": 250,
         "darkness": {"white": 0.22, "yellow": 0.22, "mid_blue": 0.22, "red": 0.22, "dark_brown": 0.22, "black": 0.15},
@@ -264,21 +264,32 @@ with st.sidebar:
         with demo_image_path.open("rb") as f:
             images["demo"] = f.read()
 
-        st.image(images["demo"], caption="Tiger Demo Image", use_container_width=True)
+        st.image(
+            images["demo"],
+            caption="Tiger Demo Image",
+            use_container_width=True,
+        )
 
     # Basic parameters
     col1, col2 = st.columns(2)
     with col1:
         name = st.text_input(
-            "Output Name", value=preset_name or "my_thread_art", help="Name the image will be saved out as."
+            "Output Name",
+            value=preset_name or "my_thread_art",
+            help="Name the image will be saved out as.",
         )
     with col2:
-        x_size = st.number_input("Width", min_value=100, max_value=2000, value=preset_x or 800)
+        x_size = st.number_input(
+            "Width",
+            min_value=100,
+            max_value=800,
+            value=preset_x or 600,
+        )
 
     n_nodes = st.number_input(
         "Number of Nodes",
         min_value=20,
-        max_value=2000,
+        max_value=500,
         value=preset_nodes or 500,
         help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
     )
