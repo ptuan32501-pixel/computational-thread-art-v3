@@ -71,7 +71,7 @@ demo_presets = {
     "Custom": {},
     "Tiger Demo (fast)": {
         "filename": "tiger.jpg",
-        "name": "tiger_small",
+        "name": "tiger_small_01",
         "x": 640,
         "nodes": 380,
         "shape": "Rectangle",
@@ -95,7 +95,7 @@ demo_presets = {
     },
     "Tiger Demo (medium)": {
         "filename": "tiger.jpg",
-        "name": "tiger_medium",
+        "name": "tiger_medium_01",
         "x": 720,
         "nodes": 440,
         "shape": "Rectangle",
@@ -109,7 +109,7 @@ demo_presets = {
     },
     "Tiger Demo (slow)": {
         "filename": "tiger.jpg",
-        "name": "tiger_big",
+        "name": "tiger_big_01",
         "x": 770,
         "nodes": 480,
         "shape": "Rectangle",
@@ -123,7 +123,7 @@ demo_presets = {
     },
     "Stag Demo (fast)": {
         "filename": "stag-large.jpg",
-        "name": "stag_small",
+        "name": "stag_small_01",
         "x": 1200,
         "nodes": 420,
         "shape": "Rectangle",
@@ -149,7 +149,7 @@ demo_presets = {
     },
     "Stag Demo (slow)": {
         "filename": "stag.jpg",
-        "name": "stag_large",
+        "name": "stag_large_01",
         "x": 1400,
         "nodes": 480,
         "shape": "Rectangle",
@@ -175,7 +175,7 @@ demo_presets = {
     },
     "Duck Demo": {
         "filename": "duck.jpg",
-        "name": "duck",
+        "name": "duck_01",
         "x": 660,
         "nodes": 440,
         "shape": "Rectangle",
@@ -189,7 +189,7 @@ demo_presets = {
     },
     "Fish Demo": {
         "filename": "fish_sq_2.jpg",
-        "name": "fish",
+        "name": "fish_01",
         "x": 1600,
         "nodes": 420,
         "shape": "Ellipse",
@@ -203,7 +203,7 @@ demo_presets = {
     },
     "Snake Demo": {
         "filename": "snake.png",
-        "name": "snake",
+        "name": "snake_01",
         "x": 1400,
         "nodes": 480,
         "shape": "Rectangle",
@@ -217,7 +217,7 @@ demo_presets = {
     },
     "Planets Demo": {
         "filename": "planets-1-Ga.png",
-        "name": "planets",
+        "name": "planets_01",
         "x": 1500,
         "nodes": 440,
         "shape": "Rectangle",
@@ -259,7 +259,7 @@ with st.sidebar:
     )
 
     preset_filename = demo_presets[demo_option].get("filename", None)
-    preset_name = demo_presets[demo_option].get("name", None)
+    preset_name = demo_presets[demo_option].get("name", Non_01e)
     preset_x = demo_presets[demo_option].get("x", None)
     preset_html_x = demo_presets[demo_option].get("html_x", None)
     preset_nodes = demo_presets[demo_option].get("nodes", None)
@@ -497,7 +497,7 @@ if generate_button:
 
     # Display a status message
     try:
-        with st.spinner("Preprocessing (takes about 10-20 seconds) ..."):
+        with st.spinner("Preprocessing (takes about 5-15 seconds) ..."):
             # Set up parameters
             args = ThreadArtColorParams(
                 name=name,
