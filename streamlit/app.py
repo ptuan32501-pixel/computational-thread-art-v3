@@ -105,7 +105,7 @@ demo_presets = {
         "filename": "tiger.jpg",
         "name": "tiger_medium_01",
         "x": 650,
-        "nodes": 400,
+        "nodes": 380,
         "shape": "Rectangle",
         "random_lines": 160,
         "darkness": {
@@ -129,14 +129,14 @@ demo_presets = {
         "filename": "tiger.jpg",
         "name": "tiger_big_01",
         "x": 700,
-        "nodes": 450,
+        "nodes": 400,
         "shape": "Rectangle",
         "random_lines": 180,
         "darkness": {
-            "black": 0.13,
-            "white": 0.13,
-            "orange": 0.13,
-            "red": 0.13,
+            "black": 0.12,
+            "white": 0.12,
+            "orange": 0.12,
+            "red": 0.12,
         },
         "blur": 4,
         "group_orders": "worb" * 8,
@@ -179,7 +179,7 @@ demo_presets = {
         "filename": "stag.jpg",
         "name": "stag_large_01",
         "x": 1400,
-        "nodes": 480,
+        "nodes": 400,
         "shape": "Rectangle",
         "random_lines": 240,
         "darkness": {
@@ -205,7 +205,7 @@ demo_presets = {
         "filename": "duck.jpg",
         "name": "duck_01",
         "x": 660,
-        "nodes": 440,
+        "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 150,
         "darkness": {
@@ -229,7 +229,7 @@ demo_presets = {
         "filename": "fish_sq_2.jpg",
         "name": "fish_01",
         "x": 1600,
-        "nodes": 420,
+        "nodes": 360,
         "shape": "Ellipse",
         "random_lines": 300,
         "darkness": {
@@ -253,7 +253,7 @@ demo_presets = {
         "filename": "snake.png",
         "name": "snake_01",
         "x": 1400,
-        "nodes": 480,
+        "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 200,
         "darkness": {"white": 0.12, "yellow": 0.12, "red": 0.12, "black": 0.14},
@@ -272,7 +272,7 @@ demo_presets = {
         "filename": "planets-1-Ga.png",
         "name": "planets_01",
         "x": 1500,
-        "nodes": 440,
+        "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 250,
         "darkness": {
@@ -335,6 +335,7 @@ with st.sidebar:
     preset_palette = demo_presets[demo_option].get("palette", None)
     preset_darkness = demo_presets[demo_option].get("darkness", None)
     preset_lines = demo_presets[demo_option].get("lines", None)
+    preset_step_size = demo_presets[demo_option].get("step_size", None)
 
     image_selected = False
     image = None
@@ -377,9 +378,10 @@ with st.sidebar:
 
     n_nodes = st.number_input(
         "Number of Nodes",
-        min_value=20,
-        max_value=500,
-        value=preset_nodes or 360,
+        min_value=60,
+        max_value=400,
+        value=preset_nodes or 320,
+        step=4,
         help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
     )
     n_nodes_real = n_nodes + (4 - n_nodes % 4)  # Ensure n_nodes is a multiple of 4
@@ -589,6 +591,7 @@ if generate_button:
                 blur_rad=blur_rad,
                 group_orders=group_orders,
                 image=image,
+                step_size=preset_step_size or 2.0,
             )
 
             # Create image object

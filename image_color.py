@@ -68,6 +68,8 @@ class ThreadArtColorParams:
     # ^ can be e.g. {"white": 0.1, "*": 0.2} to give all other colors 0.2 weighting but white 0.1
     image: Image.Image | None = None
     # ^ for streamlit page, passing through uploaded image not filename
+    step_size: float = 1.0
+    # ^ if more than 1.0 then we take slightly larger jumps over pixels when drawing lines (t_pixels uses less memory)
 
     def __post_init__(self):
         self.color_names = list(self.palette.keys())
@@ -102,6 +104,7 @@ class ThreadArtColorParams:
             critical_distance=14,
             only_return_d_coords=False,
             width_to_gap_ratio=1,
+            step_size=self.step_size,
         )
 
         # Print the estimated size in MB of each dictionary
@@ -917,7 +920,8 @@ def choose_and_subtract_best_line(
     n_lines = j_choices.size(0)
 
     # Get the pixels in the line, and rearrange it
-    coords_yx = t_pixels[i, j_choices.tolist()].int()  # [n_lines 2 pixels]
+    coords_yx = t_pixels[i, j_choices.tolist()]
+    coords_yx = coords_yx.int()  # [n_lines 2 pixels]
     is_zero = coords_yx.sum(dim=1) == 0  # [n_lines pixels]
     coords_yx = einops.rearrange(coords_yx, "j yx pixels -> yx (j pixels)")  # [2 n_lines*pixels]
 

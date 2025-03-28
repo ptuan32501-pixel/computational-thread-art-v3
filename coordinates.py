@@ -54,7 +54,7 @@ def truncate_pixels(pixels, limits):
 
 
 # Gets array of pixels going through any two points (used in lots of other functions)
-def through_pixels(p0: Float[Tensor, "2"], p1: Float[Tensor, "2"]) -> Float[Tensor, "2 len"]:
+def through_pixels(p0: Float[Tensor, "2"], p1: Float[Tensor, "2"], step_size: float = 1.0) -> Float[Tensor, "2 len"]:
     """
     Given a numpy array [p1y, p1x, p2y, p2x], returns the pixels that the line connecting p1 & p2 passes through
 
@@ -67,7 +67,8 @@ def through_pixels(p0: Float[Tensor, "2"], p1: Float[Tensor, "2"]) -> Float[Tens
 
     assert distance > 0, f"Error: {p0} and {p1} have distance zero."
 
-    pixels_in_line = p0 + np.outer((np.arange(int(distance) + 1) / distance), δ)
+    num_steps = int(distance / step_size) + 1
+    pixels_in_line = p0 + np.outer(np.linspace(0, 1, num_steps, endpoint=False), δ)
 
     return pixels_in_line.T
 
@@ -98,10 +99,11 @@ def build_through_pixels_dict(
     x,
     y,
     n_nodes,
-    shape,
-    critical_distance=14,
-    only_return_d_coords=False,
-    width_to_gap_ratio=1,
+    shape: str,
+    critical_distance: int = 14,
+    only_return_d_coords: bool = False,
+    width_to_gap_ratio: float = 1.0,
+    step_size: float = 1.0,
 ):
     if shape == "Rectangle" and isinstance(n_nodes, int):
         assert (n_nodes % 4) == 0, f"n_nodes = {n_nodes} needs to be divisible by 4, or else there will be an error"
@@ -180,14 +182,14 @@ def build_through_pixels_dict(
             key = f"vertical_{δ}"
             i = n2
             j = (n3 + δ) % n4
-            d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j])
+            d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
 
         # ==== then, get the horizontal ones ====
         for δ in range(ny + 1):
             key = f"horizontal_{δ}"
             i = n1
             j = n2 + δ
-            d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j])
+            d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
 
         # ==== finally, get the diagonal ones ====
         n_min = min(nx, ny)
@@ -201,7 +203,7 @@ def build_through_pixels_dict(
                 else:
                     i = n2 - adj
                     j = n2 + opp
-                d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j])
+                d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
 
         # =============== use the archetypes to fill in the actual lines ===============
 
