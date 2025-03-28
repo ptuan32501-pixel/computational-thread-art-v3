@@ -581,7 +581,7 @@ if generate_button:
                 blur_rad=blur_rad,
                 group_orders=group_orders,
                 image=image,
-                step_size=preset_step_size or 1.5,
+                step_size=preset_step_size or 1.618,  # golden ratio for the lulz
             )
 
             # Create image object
