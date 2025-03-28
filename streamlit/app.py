@@ -1,10 +1,13 @@
 import base64
 import gc
+import io
 import os
 import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
+
+from PIL import Image
 
 import streamlit as st
 
@@ -77,7 +80,7 @@ demo_presets = {
     "Tiger Demo (fast)": {
         "filename": "tiger.jpg",
         "name": "tiger_small_01",
-        "x": 640,
+        "x": 600,
         "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 140,
@@ -95,13 +98,13 @@ demo_presets = {
             "red": [255, 0, 0],
             "black": [0, 0, 0],
         },
-        "lines": [3000, 2200, 700, 5500],
+        "lines": [2700, 2000, 650, 5200],
         "html_x": 700,
     },
     "Tiger Demo (medium)": {
         "filename": "tiger.jpg",
         "name": "tiger_medium_01",
-        "x": 670,
+        "x": 650,
         "nodes": 400,
         "shape": "Rectangle",
         "random_lines": 160,
@@ -150,15 +153,15 @@ demo_presets = {
         "filename": "stag-large.jpg",
         "name": "stag_small_01",
         "x": 1200,
-        "nodes": 420,
+        "nodes": 360,
         "shape": "Rectangle",
-        "random_lines": 300,
+        "random_lines": 180,
         "darkness": {
             "white": 0.14,
             "light_blue": 0.14,
-            "mid_blue": 0.11,
-            "dark_blue": 0.13,
-            "black": 0.11,
+            "mid_blue": 0.10,
+            "dark_blue": 0.11,
+            "black": 0.10,
         },
         "blur": 4,
         "group_orders": "wdlbwdmlbwdmlbmb",
@@ -169,7 +172,7 @@ demo_presets = {
             "dark_blue": [0, 0, 120],
             "black": [0, 0, 0],
         },
-        "lines": [1500, 1000, 750, 3000, 7000],
+        "lines": [1400, 750, 750, 3000, 6500],
         "html_x": 1100,
     },
     "Stag Demo (slow)": {
@@ -178,7 +181,7 @@ demo_presets = {
         "x": 1400,
         "nodes": 480,
         "shape": "Rectangle",
-        "random_lines": 250,
+        "random_lines": 240,
         "darkness": {
             "white": 0.14,
             "light_blue": 0.13,
@@ -322,6 +325,7 @@ with st.sidebar:
     preset_name = demo_presets[demo_option].get("name", None)
     preset_x = demo_presets[demo_option].get("x", None)
     preset_html_x = demo_presets[demo_option].get("html_x", None)
+    preset_html_line_width = demo_presets[demo_option].get("html_line_width", None)
     preset_nodes = demo_presets[demo_option].get("nodes", None)
     preset_shape = demo_presets[demo_option].get("shape", None)
     preset_random_lines = demo_presets[demo_option].get("random_lines", None)
@@ -332,23 +336,26 @@ with st.sidebar:
     preset_darkness = demo_presets[demo_option].get("darkness", None)
     preset_lines = demo_presets[demo_option].get("lines", None)
 
+    image_selected = False
+    image = None
+
     if demo_option == "Custom":
         # User uploads their own image
         uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-
+        if uploaded_file is not None:
+            image_bytes = uploaded_file.read()
+            image_selected = True
     else:
         # Read the image from `images/` and display it
         demo_image_path = Path(__file__).parent.parent / "images" / preset_filename
-        if not demo_image_path.parent.exists():
-            demo_image_path.parent.mkdir(parents=True)
-
-        uploaded_file = None
         with demo_image_path.open("rb") as f:
-            images["demo"] = f.read()
+            image_bytes = f.read()
+            image_selected = True
 
+    if image_selected:
+        image = Image.open(io.BytesIO(image_bytes))
         st.image(
-            images["demo"],
-            caption="Tiger Demo Image",
+            image,
             use_container_width=True,
         )
 
@@ -372,7 +379,7 @@ with st.sidebar:
         "Number of Nodes",
         min_value=20,
         max_value=500,
-        value=preset_nodes or 500,
+        value=preset_nodes or 360,
         help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
     )
     n_nodes_real = n_nodes + (4 - n_nodes % 4)  # Ensure n_nodes is a multiple of 4
@@ -404,8 +411,10 @@ with st.sidebar:
 
         group_orders = st.text_input(
             "Group Orders",
-            value=preset_group_orders or "abc" * 5,
-            help="Sequence of first letters of each color, repeated. For example, 'orborb' means we draw the image in the following order: 50% orange, 50% red, 50% black, 50% orange, 50% red, 50% black lines. We recommend about 4 cycles through the colors, with darker colors coming last (so the final lines drawn on top of the image are black).",
+            value=preset_group_orders or "4",
+            help="""Sequence of first letters of each color, repeated. For example, 'orborb' means we draw the image in the following order: 50% orange, 50% red, 50% black, 50% orange, 50% red, 50% black lines. We recommend about 4 cycles through the colors, with darker colors coming last (so the final lines drawn on top of the image are black).
+            
+You can optionally just put a number, in which case it'll cycle through all the colors from lightest to darkest that many times.""",
         )
 
     # Color management
@@ -517,7 +526,7 @@ with st.sidebar:
         "Line Width",
         min_value=0.05,
         max_value=0.3,
-        value=0.14,
+        value=preset_html_line_width or 0.13,
         step=0.01,
         help="Width of the lines in the output image. Generally this can be kept at 0.14; smaller values mean thinner lines and look better when your images are very large and have a lot of lines.",
     )
@@ -534,19 +543,25 @@ with st.sidebar:
 
 # Process the image and generate thread art
 if generate_button:
-    if isinstance(demo_image_path, Path) and demo_image_path.exists():
-        image_path = demo_image_path.name
-        w_filename = None
-    elif uploaded_file is not None:
-        # Save the uploaded file to a temporary location
-        temp_img = Path(st.session_state.temp_dir.name) / f"uploaded_image.{uploaded_file.name.split('.')[-1]}"
-        with open(temp_img, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        image_path = temp_img.name
-        w_filename = None
-    else:
+    if not image_selected:
         st.error("Please upload an image or select a demo.")
         st.stop()
+
+    w_filename = None
+
+    # if isinstance(demo_image_path, Path) and demo_image_path.exists():
+    #     image_path = demo_image_path.name
+    #     w_filename = None
+    # elif uploaded_file is not None:
+    #     # Save the uploaded file to a temporary location
+    #     temp_img = Path(st.session_state.temp_dir.name) / f"uploaded_image.{uploaded_file.name.split('.')[-1]}"
+    #     with open(temp_img, "wb") as f:
+    #         f.write(uploaded_file.getbuffer())
+    #     image_path = temp_img.name
+    #     w_filename = None
+    # else:
+    #     st.error("Please upload an image or select a demo.")
+    #     st.stop()
 
     # Create palette dictionary
     palette = {colors[i]: color_values[i] for i in range(len(colors))}
@@ -564,7 +579,7 @@ if generate_button:
                 name=name,
                 x=x_size,
                 n_nodes=n_nodes_real,
-                filename=str(image_path),
+                filename=None,
                 w_filename=w_filename,
                 palette=palette,
                 n_lines_per_color=n_lines,
@@ -573,6 +588,7 @@ if generate_button:
                 darkness=darkness,
                 blur_rad=blur_rad,
                 group_orders=group_orders,
+                image=image,
             )
 
             # Create image object
@@ -586,7 +602,7 @@ if generate_button:
         for color, i, j in my_img.create_canvas_generator(verbose=False):
             line_dict[color].append((i, j))
             progress_count += 1
-            progress_bar.progress(progress_count / total_lines)
+            progress_bar.progress(progress_count / total_lines, text="Generating lines...")
 
         # Generate HTML
         html_content = my_img.generate_thread_art_html(
@@ -644,3 +660,6 @@ if st.session_state.generated_html:
     # 3. Paste the code into the block
     # 4. Save your changes
     # """)
+
+
+# psrecord 22256 --plot plot.png

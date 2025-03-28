@@ -44,8 +44,8 @@ class ThreadArtColorParams:
     name: str
     x: int
     n_nodes: int | tuple
-    filename: str
-    w_filename: Optional[str]
+    filename: str | None  # if this is None, you need to supply `image`
+    w_filename: str | None
     palette: dict[str, tuple[int, int, int]]
     n_lines_per_color: list[int]
     n_random_lines: int | Literal["all"]
@@ -64,23 +64,30 @@ class ThreadArtColorParams:
     seed: int = 0
     pixels_per_batch: int = 32
     num_overlap_rows: int = 6
-    other_colors_weighting: dict = field(
-        default_factory=dict
-    )  # can be e.g. {"white": 0.1, "*": 0.2} to give all other colors 0.2 weighting but white 0.1
+    other_colors_weighting: dict = field(default_factory=dict)
+    # ^ can be e.g. {"white": 0.1, "*": 0.2} to give all other colors 0.2 weighting but white 0.1
+    image: Image.Image | None = None
+    # ^ for streamlit page, passing through uploaded image not filename
 
     def __post_init__(self):
         self.color_names = list(self.palette.keys())
         self.color_values = list(self.palette.values())
-        first_color_letters = [color[0] for color in self.color_names]
+        first_color_letters = [
+            color[0] for color, _ in sorted(self.palette.items(), key=lambda item: sum(item[1]), reverse=True)
+        ]
         assert len(set(first_color_letters)) == len(first_color_letters), (
             "First letter of each color name must be unique."
         )
 
+        if isinstance(self.group_orders, str) and self.group_orders.isdigit():
+            self.group_orders = int(self.group_orders)
         if isinstance(self.group_orders, int):
             self.group_orders = "".join(first_color_letters) * self.group_orders
 
-        img_raw = Image.open(str(ROOT_PATH / "images" / self.filename))
-        self.y = int(self.x * (img_raw.height / img_raw.width))
+        # Load in real image, also gets us the width and height
+        if self.image is None:
+            self.image = Image.open(str(ROOT_PATH / "images" / self.filename))
+        self.y = int(self.x * (self.image.height / self.image.width))
 
         if self.shape.lower() in ["circle", "ellipse", "round"]:
             self.shape = "Ellipse"
@@ -149,14 +156,14 @@ class Img:
         t0 = time.time()
 
         self.args = args
-        self.filename = ROOT_PATH / f"images/{args.filename}"
+        self.filename = ROOT_PATH / f"images/{args.filename}" if args.filename else None
         self.save_dir = ROOT_PATH / "outputs" / args.name
         self.x = args.x
         self.y = args.y
         self.palette = {color_name: tuple(color_value) for color_name, color_value in args.palette.items()}
 
         # Get base image (and also image converted to monochrome)
-        base_image = Image.open(self.filename).resize((self.x, self.y))
+        base_image = (args.image or Image.open(self.filename)).resize((self.x, self.y))
         self.imageRGB = t.tensor((base_image).convert(mode="RGB").getdata()).reshape((self.y, self.x, 3))
         self.imageBW = t.tensor((base_image).convert(mode="L").getdata()).reshape((self.y, self.x))
 
