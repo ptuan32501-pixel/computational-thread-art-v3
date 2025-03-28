@@ -271,7 +271,7 @@ demo_presets = {
     "Planets Demo": {
         "filename": "planets-1-Ga.png",
         "name": "planets_01",
-        "x": 1200,
+        "x": 1400,
         "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 250,
@@ -361,37 +361,31 @@ with st.sidebar:
         )
 
     # Basic parameters
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        name = st.text_input(
-            "Output Name",
-            value=preset_name or "my_thread_art",
-            help="Name the image will be saved out as.",
-        )
-    with col2:
         x_size = st.number_input(
             "Width",
             min_value=100,
             max_value=1400,
             value=preset_x or 600,
         )
-
-    n_nodes = st.number_input(
-        "Number of Nodes",
-        min_value=60,
-        max_value=400,
-        value=preset_nodes or 320,
-        step=4,
-        help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
-    )
-    n_nodes_real = n_nodes + (4 - n_nodes % 4)  # Ensure n_nodes is a multiple of 4
-
-    shape = st.selectbox(
-        "Shape",
-        ["Rectangle", "Ellipse"],
-        index=0 if preset_shape == "Rectangle" or preset_shape is None else 1,
-        help="Options are Rectangle or Ellipse. If Ellipse then the nodes we generate lines between will be placed in an ellipse shape (cropping the image appropriately).",
-    )
+    with col2:
+        n_nodes = st.number_input(
+            "Number of Nodes",
+            min_value=60,
+            max_value=400,
+            value=preset_nodes or 320,
+            step=4,
+            help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
+        )
+        n_nodes_real = n_nodes + (4 - n_nodes % 4)  # Ensure n_nodes is a multiple of 4
+    with col3:
+        shape = st.selectbox(
+            "Shape",
+            ["Rectangle", "Ellipse"],
+            index=0 if preset_shape == "Rectangle" or preset_shape is None else 1,
+            help="Options are Rectangle or Ellipse. If Ellipse then the nodes we generate lines between will be placed in an ellipse shape (cropping the image appropriately).",
+        )
 
     # Advanced parameters
     with st.expander("Advanced Parameters"):
@@ -549,6 +543,7 @@ if generate_button:
         st.error("Please upload an image or select a demo.")
         st.stop()
 
+    name = preset_name or "custom_thread_art"
     w_filename = None
 
     # if isinstance(demo_image_path, Path) and demo_image_path.exists():
@@ -568,11 +563,6 @@ if generate_button:
     # Create palette dictionary
     palette = {colors[i]: color_values[i] for i in range(len(colors))}
 
-    # Create output directory
-    output_dir = Path(st.session_state.temp_dir.name) / name
-    if not output_dir.exists():
-        output_dir.mkdir(parents=True)
-
     # Display a status message
     try:
         with st.spinner("Preprocessing (takes about 5-15 seconds) ..."):
@@ -591,7 +581,7 @@ if generate_button:
                 blur_rad=blur_rad,
                 group_orders=group_orders,
                 image=image,
-                step_size=preset_step_size or 2.0,
+                step_size=preset_step_size or 1.5,
             )
 
             # Create image object
@@ -618,11 +608,10 @@ if generate_button:
         )
 
         # Success message
-        st.success(f"Thread art '{name}' generated successfully!")
+        st.success("Thread art generated successfully!")
 
         # Store the generated HTML, and delete what we don't need any more
         st.session_state.generated_html = html_content
-        st.session_state.output_name = name
         st.session_state.sf = my_img.y / my_img.x
 
         del args
@@ -650,7 +639,7 @@ if st.session_state.generated_html:
 
     # Provide HTML download
     b64_html = base64.b64encode(st.session_state.generated_html.encode()).decode()
-    href_html = f'<a href="data:text/html;base64,{b64_html}" download="{st.session_state.output_name}.html">Download HTML File</a>'
+    href_html = f'<a href="data:text/html;base64,{b64_html}" download="{name}.html">Download HTML File</a>'
     st.markdown(href_html, unsafe_allow_html=True)
 
     # # Show embed code for Squarespace
