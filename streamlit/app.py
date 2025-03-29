@@ -14,12 +14,15 @@ import streamlit as st
 
 # https://info.snowflake.com/streamlit-resource-increase-request.html?ref=blog.streamlit.io
 
+
 # Set page configuration
 st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="wide", initial_sidebar_state="expanded")
 
 # Add parent directory to path so we can import the required modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, parent_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 # for path in Path(parent_dir).iterdir():
 #     st.write(path)
 #     if not path.is_file():
@@ -27,6 +30,8 @@ sys.path.insert(0, parent_dir)
 #             st.write("sub: ", subpath)
 
 os.chdir(parent_dir)
+
+gc.collect()
 
 from image_color import Img, ThreadArtColorParams
 from streamlit.components.v1 import html as st_html
@@ -357,7 +362,7 @@ with st.sidebar:
             min_value=60,
             max_value=400,
             value=preset_nodes or 320,
-            step=4,
+            step=20,
             help="Number of nodes on the perimeter of the image to generate lines between. This increases resolution but also time to create the image.",
         )
         n_nodes_real = n_nodes + (4 - n_nodes % 4)  # Ensure n_nodes is a multiple of 4
@@ -472,7 +477,7 @@ You can optionally just put a number, in which case it'll cycle through all the 
             )
 
         with col4:
-            darkness = st.slider(
+            darkness = st.number_input(
                 "Darkness",
                 min_value=0.05,
                 max_value=0.3,
@@ -499,22 +504,24 @@ You can optionally just put a number, in which case it'll cycle through all the 
         st.error("Warning: some color names have the same first letter. Please ensure all color names are unique.")
 
     # HTML output options
-    # st.subheader("HTML Output Options")
-    html_line_width = st.slider(
-        "Line Width",
-        min_value=0.05,
-        max_value=0.3,
-        value=preset_html_line_width or 0.13,
-        step=0.01,
-        help="Width of the lines in the output image. Generally this can be kept at 0.14; smaller values mean thinner lines and look better when your images are very large and have a lot of lines.",
-    )
-    html_width = st.number_input(
-        "Output Width",
-        min_value=300,
-        max_value=2000,
-        value=preset_html_x or preset_x or 800,
-        help="Width of the output image in pixels. Increasing this will mean the final image takes longer to generate, but looks higher-resolution.",
-    )
+    cols = st.columns(2)
+    with cols[0]:
+        html_line_width = st.slider(
+            "Line width (output)",
+            min_value=0.05,
+            max_value=0.3,
+            value=preset_html_line_width or 0.13,
+            step=0.01,
+            help="Width of the lines in the output image. Generally this can be kept at 0.14; smaller values mean thinner lines and look better when your images are very large and have a lot of lines.",
+        )
+    with cols[1]:
+        html_width = st.number_input(
+            "Image width (output)",
+            min_value=300,
+            max_value=2000,
+            value=preset_html_x or preset_x or 800,
+            help="Width of the output image in pixels. Increasing this will mean the final image takes longer to generate, but looks higher-resolution.",
+        )
 
     # Generate button
     generate_button = st.button("Generate Thread Art", type="primary")
@@ -547,7 +554,7 @@ if generate_button:
 
     # Display a status message
     try:
-        with st.spinner("Preprocessing (takes about 5-15 seconds) ..."):
+        with st.spinner("Preprocessing (takes about 10-20 seconds) ..."):
             # Set up parameters
             args = ThreadArtColorParams(
                 name=name,
