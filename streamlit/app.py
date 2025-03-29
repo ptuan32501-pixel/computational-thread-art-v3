@@ -258,17 +258,18 @@ demo_presets = {
     },
     "Planets Demo": {
         "filename": "planets-1-Ga.png",
+        "w_filename": "planets-1-GwA.png",
         "name": "planets_01",
-        "x": 1400,
+        "x": 1200,
         "nodes": 360,
         "shape": "Rectangle",
-        "random_lines": 200,
+        "random_lines": 180,
         "darkness": {
-            "white": 0.20,
-            "yellow": 0.20,
-            "mid_blue": 0.20,
-            "red": 0.20,
-            "dark_brown": 0.20,
+            "white": 0.21,
+            "yellow": 0.21,
+            "mid_blue": 0.21,
+            "red": 0.21,
+            "dark_brown": 0.21,
             "black": 0.14,
         },
         "blur": 2,
@@ -281,7 +282,7 @@ demo_presets = {
             "dark_brown": [140, 60, 0],
             "black": [0, 0, 0],
         },
-        "lines": [750, 900, 450, 450, 1200, 9200],
+        "lines": [750, 900, 500, 450, 1200, 9200],
         "html_x": 1200,
     },
 }
@@ -310,6 +311,7 @@ with st.sidebar:
     )
 
     preset_filename = demo_presets[demo_option].get("filename", None)
+    preset_w_filename = demo_presets[demo_option].get("w_filename", None)
     preset_name = demo_presets[demo_option].get("name", None)
     preset_x = demo_presets[demo_option].get("x", None)
     preset_html_x = demo_presets[demo_option].get("html_x", None)
@@ -505,6 +507,8 @@ You can optionally just put a number, in which case it'll cycle through all the 
         st.error("Warning: some color names have the same first letter. Please ensure all color names are unique.")
 
     # HTML output options
+    st.subheader("Output")
+
     cols = st.columns(2)
     with cols[0]:
         html_line_width = st.number_input(
@@ -535,7 +539,6 @@ if generate_button:
         st.stop()
 
     name = preset_name or "custom_thread_art"
-    w_filename = None
 
     # if isinstance(demo_image_path, Path) and demo_image_path.exists():
     #     image_path = demo_image_path.name
@@ -563,7 +566,7 @@ if generate_button:
                 x=x_size,
                 n_nodes=n_nodes_real,
                 filename=None,
-                w_filename=w_filename,
+                w_filename=preset_w_filename,
                 palette=palette,
                 n_lines_per_color=n_lines,
                 shape=shape,
