@@ -82,6 +82,7 @@ if "output_name" not in st.session_state:
 if "temp_dir" not in st.session_state:
     st.session_state.temp_dir = tempfile.TemporaryDirectory()
 
+name = None
 
 # parameters
 demo_presets = {
@@ -506,7 +507,7 @@ You can optionally just put a number, in which case it'll cycle through all the 
     # HTML output options
     cols = st.columns(2)
     with cols[0]:
-        html_line_width = st.slider(
+        html_line_width = st.number_input(
             "Line width (output)",
             min_value=0.05,
             max_value=0.3,
@@ -520,6 +521,7 @@ You can optionally just put a number, in which case it'll cycle through all the 
             min_value=300,
             max_value=2000,
             value=preset_html_x or preset_x or 800,
+            step=50,
             help="Width of the output image in pixels. Increasing this will mean the final image takes longer to generate, but looks higher-resolution.",
         )
 
