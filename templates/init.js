@@ -37,6 +37,7 @@ colorNames.forEach((colorName, i) => {
 
     // Add title
     colorContainer.append("div")
+        .append("span")
         .attr("class", "plot-title")
         .text(colorName);
 

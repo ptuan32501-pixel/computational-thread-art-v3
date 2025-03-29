@@ -24,6 +24,10 @@
     margin: 0;
     text-align: center;
 }
+/* For Streamlit dark mode (image titles can't be seen!) */
+.plot-title {
+    background-color: white;
+}
 @media (max-width: 768px) {
     .main-container {
         flex-direction: column;
