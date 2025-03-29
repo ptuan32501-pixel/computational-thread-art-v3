@@ -4,7 +4,6 @@ import io
 import os
 import sys
 import tempfile
-import time
 import traceback
 from collections import defaultdict
 from pathlib import Path
@@ -12,6 +11,8 @@ from pathlib import Path
 from PIL import Image
 
 import streamlit as st
+
+# https://info.snowflake.com/streamlit-resource-increase-request.html?ref=blog.streamlit.io
 
 # Set page configuration
 st.set_page_config(page_title="Thread Art Generator", page_icon="🧵", layout="wide", initial_sidebar_state="expanded")
@@ -573,7 +574,7 @@ if generate_button:
         total_lines = sum(my_img.args.n_lines_per_color)
         progress_bar = st.progress(0, text="Generating lines...")
         progress_count = 0
-        for color, i, j in my_img.create_canvas_generator(verbose=False):
+        for color, i, j in my_img.create_canvas_generator():
             line_dict[color].append((i, j))
             progress_count += 1
             progress_bar.progress(progress_count / total_lines, text="Generating lines...")
