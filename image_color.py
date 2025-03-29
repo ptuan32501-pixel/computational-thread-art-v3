@@ -14,8 +14,8 @@ import einops
 import numpy as np
 import plotly.express as px
 import torch as t
-from IPython.display import HTML, clear_output, display
-from jaxtyping import Float, Int
+from IPython.display import HTML, display
+from jaxtyping import Float
 from PIL import Image, ImageFilter
 from rich import print as rprint
 from rich.table import Table
@@ -23,14 +23,13 @@ from torch import Tensor
 from tqdm import tqdm
 from tqdm.notebook import tqdm_notebook
 
-from coordinates import build_through_pixels_dict
+from coordinates import build_through_pixels_dict, pair_to_index
 from misc import (
     get_color_hash,
     get_img_hash,
     get_size_mb,
     global_random_seed,
     mask_ellipse,
-    myprogress,
     palette_to_html,
 )
 
@@ -70,8 +69,11 @@ class ThreadArtColorParams:
     # ^ for streamlit page, passing through uploaded image not filename
     step_size: float = 1.0
     # ^ if more than 1.0 then we take slightly larger jumps over pixels when drawing lines (t_pixels uses less memory)
+    debug_through_pixels_dict: bool = False
+    # ^ if True, we leave all the debug print statements e.g. tensor sizes, if false then we only print post init time
 
     def __post_init__(self):
+        t0 = time.time()
         self.color_names = list(self.palette.keys())
         self.color_values = list(self.palette.values())
         first_color_letters = [
@@ -105,20 +107,9 @@ class ThreadArtColorParams:
             only_return_d_coords=False,
             width_to_gap_ratio=1,
             step_size=self.step_size,
+            debug=self.debug_through_pixels_dict,
         )
-
-        # Print the estimated size in MB of each dictionary
-        sizes = {
-            "d_coords": get_size_mb(self.d_coords),
-            "d_joined": get_size_mb(self.d_joined),
-            "d_sides": get_size_mb(self.d_sides),
-            "t_pixels": get_size_mb(self.t_pixels),
-        }
-        print("\nObject sizes in MB:")
-        print("-" * 30)
-        for obj_name, size in sizes.items():
-            print(f"{obj_name}: {size:.4f} MB")
-        print(f"Total: {sum(sizes.values()):.4f} MB")
+        print(f"ThreadArtColorParams.__init__ done in {time.time() - t0:.2f} seconds")
 
     def __repr__(self):
         for k, v in self.__dict__.items():
@@ -322,7 +313,8 @@ class Img:
         is_clamp = "clamp" in self.dithering_params
 
         # loop over each row, from first to second last
-        for y_ in tqdm(range(y - 1), desc="Floyd-Steinberg dithering"):
+        pbar = tqdm(range(y - 1), desc="Floyd-Steinberg dithering")
+        for y_ in pbar:
             row = image_dithered[y_].to(t.float)  # [x batch 3]
             next_row = t.zeros_like(row)  # [x batch 3]
 
@@ -382,7 +374,7 @@ class Img:
             row = t.clamp(row, 0, 255)
         image_dithered[-1] = row
 
-        clear_output()
+        pbar.close()
 
         return image_dithered.to(t.int), time.time() - t0
 
@@ -412,28 +404,10 @@ class Img:
         fig.show()
 
     # Takes FS output and returns a dictionary of monochromatic images (called in __init__)
-    def generate_mono_images_dict(
-        self,
-        # t_pixels: Float[Tensor, "n_lines 2 pixels"],
-        other_colors_weighting: dict[str, dict[str, float]],
-    ):
-        # # Gets the pixels which are actually relevant (i.e. just taking the ones in the d_pixels dict)
-        # # > Update - we're not doing this any more because it's not worth it
-        # boolean_mask = t.zeros(size=self.image_dithered.shape[:-1])
-        # # pixels_y_all, pixels_x_all = list(zip(*d_pixels.values()))
-        # # pixels_y_all = t.concat(pixels_y_all).long()
-        # # pixels_x_all = t.concat(pixels_x_all).long()
-        # pixels_all = einops.rearrange(t_pixels, "p0 p1 yx pixels -> yx (p0 p1 pixels)")
-        # pixels_all = pixels_all[
-        #     :,
-        #     (pixels_all[0, :] < self.y)
-        #     & (pixels_all[0, :] >= 0)
-        #     & (pixels_all[1, :] < self.x)
-        #     & (pixels_all[1, :] >= 0),
-        # ]
-        # pixels_y_all, pixels_x_all = pixels_all.int()
-        # boolean_mask[pixels_y_all, pixels_x_all] = 1
-        boolean_mask = t.ones(size=self.image_dithered.shape[:-1])
+    def generate_mono_images_dict(self, other_colors_weighting: dict[str, dict[str, float]]):
+        # Note - this function used to use the `t_pixels` tensor to only get the pixels which a line runs through,
+        # but since this is just for a histogram, doing that is totally not relevant (and also doesn't change things
+        # much as long as your image is high-res).
 
         d_histogram = dict()  # histogram of frequency of colors (cropped to a circle if necessary)
         d_mono_images_pre = dict()  # mono-color images, before they've been processed
@@ -445,13 +419,13 @@ class Img:
             if color_name not in self.imagesMono:
                 mono_image = (get_img_hash(self.image_dithered) == get_color_hash(t.tensor(color_value))).to(t.int)
                 d_mono_images_pre[color_name] = mono_image
-                d_histogram[color_name] = (mono_image * boolean_mask).sum() / boolean_mask.sum()
+                d_histogram[color_name] = mono_image.sum() / mono_image.numel()
             else:
                 mono_image = self.imagesMono[
                     color_name
                 ]  # it's already a 2D monochrome image, with black = important areas
                 d_mono_images_pre[color_name] = mono_image
-                d_histogram[color_name] = (mono_image * boolean_mask).sum() / boolean_mask.sum()
+                d_histogram[color_name] = mono_image.sum() / mono_image.numel()
 
         # Renormalize d_histogram (because if we used mono images for specific colors, then they won't sum to 1)
         nTotal = sum(d_histogram.values())
@@ -499,16 +473,16 @@ class Img:
         rprint(table)
 
     # Creates the actual art
-    def create_canvas(self, verbose: bool = True) -> dict[str, list[tuple[int, int]]]:
+    def create_canvas(self) -> dict[str, list[tuple[int, int]]]:
         from collections import defaultdict
 
         line_dict = defaultdict(list)
-        for color, i, j in self.create_canvas_generator(verbose=verbose):
+        for color, i, j in self.create_canvas_generator():
             line_dict[color].append((i, j))
 
         return line_dict
 
-    def create_canvas_generator(self, verbose: bool = True) -> Generator:
+    def create_canvas_generator(self) -> Generator:
         assert len(self.palette) == len(self.args.n_lines_per_color), (
             "Palette and lines per color don't match. Did you change the palette without re-updating params?"
         )
@@ -532,47 +506,42 @@ class Img:
         # Setting a random seed at the start of this function ensures the lines will be the same (unless params change)
         global_random_seed(self.args.seed)
 
-        # Create rich progress bars for each color
-        progress = myprogress(verbose=verbose)
-        with progress:
-            for color_idx, color_name in enumerate(self.palette.keys()):
-                # Setup variables (including the place we'll start)
-                n_lines = self.args.n_lines_per_color[color_idx]
-                m_image = mono_image_dict[color_name]
-                # > line_dict[color_name] = []
-                i = np.random.choice(list(self.args.d_joined.keys())).item()  # First node
+        pbar = tqdm(desc="Creating canvas", total=sum(self.args.n_lines_per_color))
+        for color_idx, color_name in enumerate(self.palette.keys()):
+            # Setup variables (including the place we'll start)
+            n_lines = self.args.n_lines_per_color[color_idx]
+            m_image = mono_image_dict[color_name]
 
-                # Add task for this color
-                task = progress.add_task(f"{color_name}", total=n_lines)
+            pbar.set_postfix_str(f"Current color: {color_name}")
 
-                for n in range(n_lines):  # range(n_lines): #, leave=False):
-                    # Choose and add line
-                    j = choose_and_subtract_best_line(
-                        m_image=m_image,
-                        i=i,
-                        w=self.w,
-                        n_random_lines=self.args.n_random_lines,
-                        darkness=darkness_dict[color_name],
-                        d_joined=self.args.d_joined,
-                        t_pixels=self.args.t_pixels,
-                    )
-                    # > line_dict[color_name].append((i, j))
-                    yield color_name, i, j
+            # Choose starting node (i.e. the first node to draw a line from)
+            i = np.random.choice(list(self.args.d_joined.keys())).item()
 
-                    # Get the outgoing node (optionally jumping to a random non-consecutive node, for svg security)
-                    i = j + 1 if (j % 2 == 0) else j - 1
-                    if self.args.n_consecutive != 0 and ((n + 1) % self.args.n_consecutive) == 0:
-                        i = list(self.args.d_joined.keys())[t.randint(0, len(self.args.d_joined), (1,))]
+            for n in range(n_lines):  # range(n_lines): #, leave=False):
+                # Choose and add line
+                j = choose_and_subtract_best_line(
+                    m_image=m_image,
+                    i=i,
+                    w=self.w,
+                    n_random_lines=self.args.n_random_lines,
+                    darkness=darkness_dict[color_name],
+                    d_joined=self.args.d_joined,
+                    t_pixels=self.args.t_pixels,
+                    n_nodes=self.args.n_nodes,
+                )
+                # > line_dict[color_name].append((i, j))
+                yield color_name, i, j
 
-                    # Update progress bar
-                    progress.update(task, advance=1)
+                # Get the outgoing node (optionally jumping to a random non-consecutive node, for svg security)
+                i = j + 1 if (j % 2 == 0) else j - 1
+                if self.args.n_consecutive != 0 and ((n + 1) % self.args.n_consecutive) == 0:
+                    i = list(self.args.d_joined.keys())[t.randint(0, len(self.args.d_joined), (1,))]
 
-                # Make sure progress bar has completed
-                progress.update(task, completed=n_lines)
+            # Update progress bar
+            pbar.update(n_lines)
 
         # If not verbose then we don't have a progress bar, just a single printout at the end
-        if not verbose:
-            print(f"Created canvas in {time.time() - t0:.2f} seconds")
+        print(f"Created canvas in {time.time() - t0:.2f} seconds")
 
         # Return line dict
         return line_dict
@@ -793,7 +762,7 @@ class Img:
         full_height = int(full_width * self.args.y / self.args.x)
 
         # Individual color images will be half the scale
-        x_small = x_small or int(x / 3)
+        x_small = x_small or int(0.4 * x)
         small_width = int(x_small)
         small_height = int(small_width * self.args.y / self.args.x)
 
@@ -899,6 +868,7 @@ def choose_and_subtract_best_line(
     darkness: float,
     d_joined: dict[int, list[int]],
     t_pixels: Float[Tensor, "n_lines 2 pixels"],
+    n_nodes: int,
 ) -> int:
     """
     Generates a bunch of random lines (choosing them from `d_joined` which is a dictionary mapping node ints to all the
@@ -920,13 +890,11 @@ def choose_and_subtract_best_line(
     n_lines = j_choices.size(0)
 
     # Get the pixels in the line, and rearrange it
-    coords_yx = t_pixels[i, j_choices.tolist()]
-    coords_yx = coords_yx.int()  # [n_lines 2 pixels]
-    is_zero = coords_yx.sum(dim=1) == 0  # [n_lines pixels]
+    coords_yx = t_pixels[pair_to_index(i, j_choices, n_nodes)].int()  # [n_lines 2 pixels]
+    is_zero = (coords_yx == 0).all(dim=1)  # [n_lines pixels]
     coords_yx = einops.rearrange(coords_yx, "j yx pixels -> yx (j pixels)")  # [2 n_lines*pixels]
 
     # Get the pixels in the line, and reshape it back to [n_lines, pixels]
-    # TODO - I should be able to index without flattening it first, to make this code much shorter
     pixel_values = m_image[coords_yx[0], coords_yx[1]]  # [n_lines*pixels]
     pixel_values = einops.rearrange(pixel_values, "(j pixels) -> j pixels", j=n_lines).masked_fill(is_zero, 0)
 
@@ -943,9 +911,8 @@ def choose_and_subtract_best_line(
         scores = pixel_values.sum(-1) / lengths  # [n_lines]
 
     best_j = j_choices[scores.argmax()].item()
-    assert isinstance(best_j, int)
 
-    coords_yx = t_pixels[i, best_j].int()  # [yx=2 pixels]
+    coords_yx = t_pixels[pair_to_index(i, best_j, n_nodes)].int()  # [yx=2 pixels]
     is_zero = coords_yx.sum(0) == 0  # [pixels]
     coords_yx = coords_yx[:, ~is_zero]
     m_image[coords_yx[0], coords_yx[1]] -= darkness

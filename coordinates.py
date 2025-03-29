@@ -2,13 +2,17 @@
 Includes all funcs related to coordinate placement
 """
 
-from typing import overload
+import gc
+import random
 
 import numpy as np
 import torch as t
+from IPython.display import clear_output
 from jaxtyping import Float, Int
 from torch import Tensor
 from tqdm import tqdm
+
+from misc import get_size_mb
 
 t.classes.__path__ = []
 
@@ -43,12 +47,17 @@ def truncate_coords(coords, limits):
 # Truncates an array of pixel coordinates, to make sure that none are outside the bounds of the image (used in `build_through_pixels_dict` function)
 def truncate_pixels(pixels, limits):
     """
-    Truncates a pixels array (i.e. that was generated from the through_pixels function), to avoid index errors
+    Truncates a pixels array (i.e. that was generated from the through_pixels function)
+
+    This is different from truncate_coords because we can actually make this thing shorter.
     """
 
-    for i in range(2):
-        pixels[i][pixels[i] < 0] = 0
-        pixels[i][pixels[i] > limits[i]] = limits[i]
+    # for i in range(2):
+    #     pixels[i][pixels[i] < 0] = 0
+    #     pixels[i][pixels[i] > limits[i]] = limits[i]
+
+    mask = (pixels[0] >= 0) & (pixels[0] <= limits[0]) & (pixels[1] >= 0) & (pixels[1] <= limits[1])
+    pixels = pixels[:, mask]
 
     return pixels
 
@@ -56,19 +65,21 @@ def truncate_pixels(pixels, limits):
 # Gets array of pixels going through any two points (used in lots of other functions)
 def through_pixels(p0: Float[Tensor, "2"], p1: Float[Tensor, "2"], step_size: float = 1.0) -> Float[Tensor, "2 len"]:
     """
-    Given a numpy array [p1y, p1x, p2y, p2x], returns the pixels that the line connecting p1 & p2 passes through
+    Given two PyTorch tensors p0 and p1, returns the pixels that the line connecting p0 & p1 passes through.
 
-    Returns it as float rather than integer, so that it can be reflected / translated accurately before being converted to int
+    Returns it as lower-resolution floats for further processing.
     """
 
-    δ = np.subtract(p1, p0)
+    assert isinstance(p0, t.Tensor) and isinstance(p1, t.Tensor), "Inputs must be PyTorch tensors."
+    assert p0.shape == (2,) and p1.shape == (2,), "Inputs must be 1D tensors of shape (2,)."
 
-    distance = (δ**2).sum() ** 0.5
+    δ = p1 - p0
+    distance = t.sqrt((δ**2).sum())
 
     assert distance > 0, f"Error: {p0} and {p1} have distance zero."
 
     num_steps = int(distance / step_size) + 1
-    pixels_in_line = p0 + np.outer(np.linspace(0, 1, num_steps, endpoint=False), δ)
+    pixels_in_line = p0 + t.outer(t.linspace(0, 1, num_steps, dtype=t.float32, device=p0.device), δ)
 
     return pixels_in_line.T
 
@@ -92,6 +103,49 @@ def get_thick_line(p0, p1, all_coords, thickness=1):
     return all_coords[:, np.abs(c_p - c_q) < thickness]
 
 
+def pair_to_index(
+    i: int,
+    j: int | Int[Tensor, "batch"],
+    n: int,
+) -> int | Tensor:
+    """
+    Maps a tuple (i, j) where 0 <= i < j < n to a unique index
+    in the range [0, 0.5*n*(n-1) - 1].
+
+    This function creates a bijective mapping from all possible (i, j) pairs
+    to a continuous range of indices.
+
+    We can also pass `i` and/or `j` as tensors, in which case the function will return a tensor of indices.
+
+    Example:
+        For n = 4, the pairs (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
+        will be mapped to indices 0, 1, 2, 3, 4, 5 respectively.
+    """
+    # Convert scalar tensors / arrays to plain integers
+    if hasattr(j, "item"):
+        j = j.item() if j.size == 1 else j
+
+    # Simple case: just return the index as an integer, if both are ints
+    if isinstance(j, int):
+        i, j = min(i, j), max(i, j)
+
+    # Messier case where j is an array so we need to do some casting and tensor sorting
+    else:
+        if not isinstance(j, t.Tensor):
+            j = t.tensor(j, dtype=t.int16)
+        i = t.tensor(i, dtype=t.int16).repeat(len(j))
+        i, j = t.min(i, j), t.max(i, j)
+
+    return (n - 1) * i - i * (i + 1) // 2 + j - 1
+
+
+# pairs = [(0, 1), (0, 2), (1, 2)]
+# n = 3
+
+# for index, (i, j) in enumerate(pairs):
+#     assert pair_to_index(i, j, n) == index
+
+
 # ================================================================
 
 
@@ -104,18 +158,31 @@ def build_through_pixels_dict(
     only_return_d_coords: bool = False,
     width_to_gap_ratio: float = 1.0,
     step_size: float = 1.0,
+    n_lines_per_memory_clear: int | None = None,  # set to about 5k?
+    debug: bool = False,
 ):
     if shape == "Rectangle" and isinstance(n_nodes, int):
         assert (n_nodes % 4) == 0, f"n_nodes = {n_nodes} needs to be divisible by 4, or else there will be an error"
 
     d_coords: dict[int, Float[Tensor, "2"]] = {}  # maps i -> coordinates of node i on perimeter
-    d_pixels_archetypes: dict[str, Float[Tensor, "2 len"]] = {}  # helps construct `d_pixels`
-    d_pixels: dict[tuple[int, int], Int[Tensor, "2 len"]] = {}  # maps (i, j) -> int pixels, for creating canvas
     d_joined: dict[int, list[int]] = {}  # maps node index i -> list of nodes connected to that one
     d_sides: dict[int, list[int]] = {}  # maps side index j -> list of nodes on that side
 
+    d_archetypes = {}  # see later in code
+
+    # Note - we used to have `d_pixels` which mapped tuples of f(i, j) -> Int[Tensor, "2 len"], but now we just use a
+    # tensor `t_pixels` of size (0.5 * n_nodes * (n_nodes + 1), 2, max_pixels), where the first dimension is the one
+    # we use to index some pair f(i, j) into the tensor. This is faster in the actual generation phase cause we get to
+    # just index once and concatenate, and do everything as a single tensor. Note, the use of `max_pixels` means there's
+    # some buffer room in the tensor (which we pad with zeros), but this small memory inefficiency is basically fine.
+    # Note, f(i, j) is the function pair_to_index above.
+    max_pixels_guess = int((x**2 + y**2) ** 0.5 / step_size) + 2
+    n_lines_total = int(0.5 * n_nodes * (n_nodes - 1))
+    t_pixels = t.zeros((n_lines_total, 2, max_pixels_guess), dtype=t.int16)
+
     if shape == "Rectangle":
-        # we either read the number of nodes and divide them proportionally between sides, or the number of nodes is externally specified
+        # we either read the number of nodes and divide them proportionally between sides, or the number of nodes is
+        # externally specified
         if type(n_nodes) in [int, np.int64]:
             nx = 2 * int(n_nodes * 0.25 * x / (x + y))
             ny = 2 * int(n_nodes * 0.25 * y / (x + y))
@@ -175,42 +242,28 @@ def build_through_pixels_dict(
         for i in d_sides:
             d_joined[i] = [j for j in range(n4) if d_sides[i] != d_sides[j]]
 
-        # =============== get all the archetypes (i.e.lines not related via translation/reflection/rotation) ===============
-
-        # ==== first, get the vertical ones ====
-        for δ in range(nx + 1):
-            key = f"vertical_{δ}"
-            i = n2
-            j = (n3 + δ) % n4
-            d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
-
-        # ==== then, get the horizontal ones ====
-        for δ in range(ny + 1):
-            key = f"horizontal_{δ}"
-            i = n1
-            j = n2 + δ
-            d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
-
-        # ==== finally, get the diagonal ones ====
-        n_min = min(nx, ny)
-        n_max = max(nx, ny)
-        for adj in range(n_min + 1):
-            for opp in range(max(adj, 1), n_max + 1):
-                key = f"diagonal_{adj}_{opp}"
-                if nx >= ny:
-                    i = n2 + adj
-                    j = n2 - opp
-                else:
-                    i = n2 - adj
-                    j = n2 + opp
-                d_pixels_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
-
-        # =============== use the archetypes to fill in the actual lines ===============
+        # =============== compute archetypal pixels and fill the pixel tensor ===============
 
         progress_bar = tqdm(
             desc="Building pixels dict",
             total=sum([len(d_joined[i]) for i in d_joined]) // 2,
         )
+
+        # Build archetypes only when needed and store them in a dictionary
+        def get_archetype(key_type, a, b=None):
+            key = f"{key_type}_{a}" if b is None else f"{key_type}_{a}_{b}"
+            if key not in d_archetypes:
+                if key_type == "vertical":
+                    i, j = n2, (n3 + a) % n4
+                elif key_type == "horizontal":
+                    i, j = n1, n2 + a
+                elif key_type == "diagonal":
+                    if nx >= ny:
+                        i, j = n2 + a, n2 - b
+                    else:
+                        i, j = n2 - a, n2 + b
+                d_archetypes[key] = through_pixels(d_coords[i], d_coords[j], step_size=step_size)
+            return d_archetypes[key].clone()
 
         for idx, i in enumerate(d_joined):
             for j in d_joined[i]:
@@ -225,22 +278,22 @@ def build_through_pixels_dict(
                     else:
                         i_, j_ = i, j
                     δ = (i_ + j_) - (2 * n2 + ny)
-                    key = f"vertical_{abs(δ)}"
-                    pixels = d_pixels_archetypes[key].clone()
+                    pixels = get_archetype("vertical", abs(δ))
                     if δ < 0:
                         pixels[1] = -pixels[1]
                     pixels[1] += (n2 - i_) * xd
-                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).int()
+                    pixels_truncated = truncate_pixels(pixels.to(t.int16), [y, x])
+                    t_pixels[pair_to_index(i, j, n_nodes), :, : pixels_truncated.size(1)] = pixels_truncated
 
                 # === then, check if they're opposite horizontal, if so then populate using the archetypes ===
                 elif (d_sides[i], d_sides[j]) == (0, 2):
                     δ = (i + j) - (2 * n1 + nx)
-                    key = f"horizontal_{abs(δ)}"
-                    pixels = d_pixels_archetypes[key].clone()
+                    pixels = get_archetype("horizontal", abs(δ))
                     if δ < 0:
                         pixels[0] = -pixels[0]
                     pixels[0] += (n1 - i) * yd
-                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).int()
+                    pixels_truncated = truncate_pixels(pixels.to(t.int16), [y, x])
+                    t_pixels[pair_to_index(i, j, n_nodes), :, : pixels_truncated.size(1)] = pixels_truncated
 
                 # === finally, the diagonal case ===
                 else:
@@ -265,8 +318,7 @@ def build_through_pixels_dict(
                     adj = min(i_len, j_len)
                     opp = max(i_len, j_len)
 
-                    key = f"diagonal_{adj}_{opp}"
-                    pixels = d_pixels_archetypes[key].clone()
+                    pixels = get_archetype("diagonal", adj, opp)
 
                     # flip in x = y
                     if ((x_len > y_len) != (x > y)) and (x_len != y_len):
@@ -278,9 +330,12 @@ def build_through_pixels_dict(
                     if y_side == 0:
                         pixels[1] = x - pixels[1]
 
-                    d_pixels[(i, j)] = truncate_pixels(pixels.to(t.int), [y, x]).int()
+                    pixels_truncated = truncate_pixels(pixels.to(t.int16), [y, x])
+                    t_pixels[pair_to_index(i, j, n_nodes), :, : pixels_truncated.size(1)] = pixels_truncated
 
                 progress_bar.update(1)
+                if (n_lines_per_memory_clear is not None) and (random.random() < 1 / n_lines_per_memory_clear):
+                    gc.collect()
 
         progress_bar.n = sum([len(d_joined[i]) for i in d_joined]) // 2
 
@@ -316,27 +371,52 @@ def build_through_pixels_dict(
                 # Avoid double counting: only consider (i0, i1) for i0 < i1
                 if i0 > i1:
                     break
+
                 # Check if the reflection of this line is already in the dict
-                reflection = (n_nodes + 1 - i1, n_nodes + 1 - i0)
-                if reflection in d_pixels:  # and False:
-                    y_reflected, x_reflected = d_pixels[reflection]
-                    d_pixels[(i0, i1)] = t.stack([(y - y_reflected).flip(0), x_reflected.flip(0)])
-                # If reflection isn't in the dict, add it
+                idx = pair_to_index(i0, i1, n_nodes)
+                reflection_idx = pair_to_index(n_nodes + 1 - i1, n_nodes + 1 - i0, n_nodes)
+                if t_pixels[reflection_idx].max() > 0:
+                    y_reflected, x_reflected = t_pixels[reflection_idx]
+                    pixels = t.stack([(y - y_reflected).flip(0), x_reflected.flip(0)])
+
+                # If reflection isn't in the dict, we need to create it
                 else:
                     p0 = d_coords[i0]
-                    d_pixels[(i0, i1)] = through_pixels(p0, p1).to(t.int)
-                    progress_bar.update(1)
+                    pixels = through_pixels(p0, p1, step_size=step_size)
+
+                pixels_truncated = truncate_pixels(pixels.to(t.int16), [y, x])
+                t_pixels[idx, :, : pixels_truncated.size(1)] = pixels_truncated
+
+                progress_bar.update(1)
+                if (n_lines_per_memory_clear is not None) and (random.random() < 1 / n_lines_per_memory_clear):
+                    gc.collect()
 
         if only_return_d_coords:
             return d_coords
 
+    # Print the estimated size in MB of each dictionary
+    sizes = {
+        "d_coords": get_size_mb(d_coords),
+        "d_joined": get_size_mb(d_joined),
+        "d_sides": get_size_mb(d_sides),
+        "d_archetypes": get_size_mb(d_archetypes),
+        "t_pixels": get_size_mb(t_pixels),
+    }
+    print("\nObject sizes in MB:")
+    print("-" * 30)
+    for obj_name, size in sizes.items():
+        print(f"{obj_name}: {size:.4f} MB")
+    print(f"Total: {sum(sizes.values()):.4f} MB")
+
     # =============== populate the tensor ===============
 
-    max_pixels = max([pixels.size(1) for pixels in d_pixels.values()])
-    t_pixels = t.zeros((n_nodes, n_nodes, 2, max_pixels), dtype=t.int16)
-    for (i, j), pixels in d_pixels.items():
-        t_pixels[i, j, :, : pixels.size(1)] = pixels
-        t_pixels[j, i, :, : pixels.size(1)] = pixels
+    # We overestimated to get the size of t_pixels, so we need to truncate it
+    t_pixels_sum = t_pixels.sum(dim=(0, 1))
+    max_pixels = t_pixels_sum.nonzero()[-1].item()
+    print(f"Cropping {t_pixels.shape[-1] - max_pixels} pixels")
+    t_pixels = t_pixels[:, :, :max_pixels]
 
-    del d_pixels
+    if not debug:
+        clear_output()
+
     return d_coords, d_joined, d_sides, t_pixels

@@ -9,16 +9,8 @@ import numpy as np
 import torch as t
 import webcolors
 from IPython.display import display
+from jaxtyping import Int
 from PIL import Image, ImageDraw, ImageOps
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 from torch import Tensor
 
 t.classes.__path__ = []
@@ -318,16 +310,18 @@ def draw_diagram(
     display(ImageOps.flip(img))
 
 
-def myprogress(verbose: bool):
-    return Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        disable=not verbose,
-    )
+# # All from `rich.progress`, no longer used:
+
+# def myprogress(verbose: bool):
+#     return Progress(
+#         TextColumn("[progress.description]{task.description}"),
+#         BarColumn(),
+#         TaskProgressColumn(),
+#         MofNCompleteColumn(),
+#         TimeElapsedColumn(),
+#         TimeRemainingColumn(),
+#         disable=not verbose,
+#     )
 
 
 def get_size_mb(obj) -> float:

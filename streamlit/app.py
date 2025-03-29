@@ -4,6 +4,8 @@ import io
 import os
 import sys
 import tempfile
+import time
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -74,6 +76,7 @@ if "output_name" not in st.session_state:
 if "temp_dir" not in st.session_state:
     st.session_state.temp_dir = tempfile.TemporaryDirectory()
 
+
 # parameters
 demo_presets = {
     "Custom": {},
@@ -81,17 +84,17 @@ demo_presets = {
         "filename": "tiger.jpg",
         "name": "tiger_small_01",
         "x": 600,
-        "nodes": 360,
+        "nodes": 320,
         "shape": "Rectangle",
         "random_lines": 140,
         "darkness": {
-            "white": 0.15,
-            "orange": 0.15,
-            "red": 0.15,
-            "black": 0.15,
+            "white": 0.16,
+            "orange": 0.16,
+            "red": 0.16,
+            "black": 0.16,
         },
         "blur": 4,
-        "group_orders": "worb" * 5,
+        "group_orders": "5",
         "palette": {
             "white": [255, 255, 255],
             "orange": [255, 130, 0],
@@ -101,37 +104,13 @@ demo_presets = {
         "lines": [2700, 2000, 650, 5200],
         "html_x": 700,
     },
-    "Tiger Demo (medium)": {
-        "filename": "tiger.jpg",
-        "name": "tiger_medium_01",
-        "x": 650,
-        "nodes": 380,
-        "shape": "Rectangle",
-        "random_lines": 160,
-        "darkness": {
-            "black": 0.12,
-            "white": 0.12,
-            "orange": 0.14,
-            "red": 0.14,
-        },
-        "blur": 4,
-        "group_orders": "worb" * 6,
-        "palette": {
-            "white": [255, 255, 255],
-            "orange": [255, 130, 0],
-            "red": [255, 0, 0],
-            "black": [0, 0, 0],
-        },
-        "lines": [3000, 2800, 1200, 7000],
-        "html_x": 750,
-    },
     "Tiger Demo (slow)": {
         "filename": "tiger.jpg",
         "name": "tiger_big_01",
         "x": 700,
         "nodes": 400,
         "shape": "Rectangle",
-        "random_lines": 180,
+        "random_lines": 200,
         "darkness": {
             "black": 0.12,
             "white": 0.12,
@@ -139,7 +118,7 @@ demo_presets = {
             "red": 0.12,
         },
         "blur": 4,
-        "group_orders": "worb" * 8,
+        "group_orders": "8",
         "palette": {
             "white": [255, 255, 255],
             "orange": [255, 130, 0],
@@ -148,6 +127,7 @@ demo_presets = {
         },
         "lines": [5400, 4000, 2000, 9500],
         "html_x": 800,
+        "html_line_width": 0.11,
     },
     "Stag Demo (fast)": {
         "filename": "stag-large.jpg",
@@ -200,6 +180,7 @@ demo_presets = {
         },
         "lines": [1600, 900, 850, 3300, 8000],
         "html_x": 1200,
+        "html_line_width": 0.11,
     },
     "Duck Demo": {
         "filename": "duck.jpg",
@@ -231,7 +212,7 @@ demo_presets = {
         "x": 1100,
         "nodes": 360,
         "shape": "Ellipse",
-        "random_lines": 300,
+        "random_lines": 200,
         "darkness": {
             "white": 0.28,
             "orange": 0.25,
@@ -255,7 +236,7 @@ demo_presets = {
         "x": 1200,
         "nodes": 360,
         "shape": "Rectangle",
-        "random_lines": 200,
+        "random_lines": 160,
         "darkness": {"white": 0.12, "yellow": 0.12, "red": 0.12, "black": 0.14},
         "blur": 2,
         "group_orders": "wwyyrrbwyrbwyrbwyrbbb",
@@ -274,7 +255,7 @@ demo_presets = {
         "x": 1400,
         "nodes": 360,
         "shape": "Rectangle",
-        "random_lines": 250,
+        "random_lines": 200,
         "darkness": {
             "white": 0.20,
             "yellow": 0.20,
@@ -394,7 +375,7 @@ with st.sidebar:
             min_value=10,
             max_value=500,
             value=preset_random_lines or 150,
-            help="Number of random lines to consider each time we draw a new line.",
+            help="Number of random lines to consider each time we draw a new line. More lines takes longer, but leads to a higher resolution image (although past about 150 you get diminishing returns).",
         )
 
         blur_rad = st.number_input(
@@ -621,8 +602,6 @@ if generate_button:
 
     except Exception as e:
         st.error(f"Error generating thread art: {str(e)}")
-        import traceback
-
         st.code(traceback.format_exc())
 
 
@@ -653,5 +632,9 @@ if st.session_state.generated_html:
     # 4. Save your changes
     # """)
 
+# netstat -ano | findstr "0.0.0.0:8501.*LISTENING"
+# psrecord 49256 --plot plot.png
 
-# psrecord 22256 --plot plot.png
+# # simpler / longer versions:
+# netstat -ano | findstr :8501
+# netstat -ano | findstr ":8501.*LISTENING" | for /f "tokens=5" %a in ('findstr /i "listening"') do @echo %a
