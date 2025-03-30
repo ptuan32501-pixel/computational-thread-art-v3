@@ -5,7 +5,6 @@ const yPermSmall = randPerm * smallHeight;
 
 const margin = 0;
 const frameDuration = 50;
-const colorNames = Object.keys(data.palette);
 
 // Setup full-color SVG and scales
 const fullSvg = d3.select("#full-canvas");
@@ -26,9 +25,9 @@ const fullScaleY = d3.scaleLinear()
 const colorsContainer = d3.select(".colors-container");
 
 // Generate individual color containers, and set up scales for them
-colorNames.forEach((colorName, i) => {
-    const rgbColor = data.palette[colorName];
-    const isVeryLightColor = rgbColor[0] + rgbColor[1] + rgbColor[2] >= 255 * 1.9;
+data.palette.forEach((colorRGB, i) => {
+    const rgbValues = colorRGB.match(/\d+/g).map(Number);
+    const isVeryLightColor = rgbValues[0] + rgbValues[1] + rgbValues[2] >= 255 * 1.9;
     const backgroundColor = isVeryLightColor ? "black" : "white";
 
     // Create a container for each color
@@ -39,7 +38,7 @@ colorNames.forEach((colorName, i) => {
     colorContainer.append("div")
         .append("span")
         .attr("class", "plot-title")
-        .text(colorName);
+        .text(colorRGB);
 
     // Add SVG for this color
     colorContainer.append("svg")
@@ -57,7 +56,7 @@ const svgs = {};
 const scalesX = {};
 const scalesY = {};
 
-colorNames.forEach((color, i) => {
+data.palette.forEach((color, i) => {
     svgs[color] = d3.select("#canvas-" + i);
     
     scalesX[color] = d3.scaleLinear()
@@ -80,17 +79,18 @@ function getSlice(arr, x, y, color) {
 let colorLines = {};
 let allLines = [];
 
-colorNames.forEach(color => {
+data.palette.forEach(color => {
     colorLines[color] = [];
 });
 
 // Process lines according to group orders and separate by color
 data.group_orders_list.forEach((groupIdx, step) => {
-    let color = colorNames[groupIdx];
-    let lines = getSlice(data.line_dict[color], data.group_orders_count[groupIdx], data.group_orders_total[groupIdx], data.palette[color]);
+    let color = data.palette[groupIdx];
+    let lines = getSlice(data.line_dict[color], data.group_orders_count[groupIdx], data.group_orders_total[groupIdx], color);
     data.group_orders_count[groupIdx]++;
     colorLines[color].push(...lines);
     allLines.push(...lines);
+    console.log(`Group ${groupIdx} (${color}) - Step ${step}: ${lines.length} lines`);
 });
 
 document.getElementById("slider").max = 1;
@@ -102,7 +102,7 @@ const allLinesWithIds = allLines.map((line, index) => ({
 }));
 
 const colorLinesWithIds = {};
-colorNames.forEach(color => {
+data.palette.forEach(color => {
     colorLinesWithIds[color] = colorLines[color].map((line, index) => ({
         ...line,
         id: `${color}-line-${index}`
@@ -112,7 +112,7 @@ colorNames.forEach(color => {
 // Track currently displayed lines
 let currentFullLines = [];
 let currentColorLines = {};
-colorNames.forEach(color => {
+data.palette.forEach(color => {
     currentColorLines[color] = [];
 });
 
@@ -127,13 +127,13 @@ function createAllLineElements() {
         .attr("y1", d => fullScaleY(data.d_coords[d.coords[0]][0]) + (Math.random() * 2 * yPerm - yPerm))
         .attr("x2", d => fullScaleX(data.d_coords[d.coords[1]][1]) + (Math.random() * 2 * xPerm - xPerm))
         .attr("y2", d => fullScaleY(data.d_coords[d.coords[1]][0]) + (Math.random() * 2 * yPerm - yPerm))
-        .attr("stroke", d => `rgb(${d.color.join(",")})`)
+        .attr("stroke", d => d.color)
         .attr("stroke-width", lineWidth)
         .attr("visibility", "hidden") // Start with all lines hidden
         .attr("data-index", (d, i) => i); // Store index for easy access
     
     // Create all lines for each color canvas
-    colorNames.forEach(color => {
+    data.palette.forEach(color => {
         svgs[color].selectAll("line")
             .data(colorLinesWithIds[color], d => d.id)
             .enter()
@@ -142,7 +142,7 @@ function createAllLineElements() {
             .attr("y1", d => scalesY[color](data.d_coords[d.coords[0]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
             .attr("x2", d => scalesX[color](data.d_coords[d.coords[1]][1]) + (Math.random() * 2 * xPermSmall - xPermSmall))
             .attr("y2", d => scalesY[color](data.d_coords[d.coords[1]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
-            .attr("stroke", d => `rgb(${d.color.join(",")})`)
+            .attr("stroke", d => d.color)
             .attr("stroke-width", lineWidth/2)
             .attr("visibility", "hidden") // Start with all lines hidden
             .attr("data-index", (d, i) => i); // Store index for easy access
@@ -161,7 +161,7 @@ function updateVisibility(progress) {
         .attr("visibility", (d, i) => i < totalLinesToShow ? "visible" : "hidden");
     
     // For each color canvas
-    colorNames.forEach(color => {
+    data.palette.forEach(color => {
         const totalLinesForColor = colorLinesWithIds[color].length;
         const linesToShowForColor = Math.ceil(progress * totalLinesForColor);
         

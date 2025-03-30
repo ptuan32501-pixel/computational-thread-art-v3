@@ -384,7 +384,7 @@ def build_through_pixels_dict(
                     p0 = d_coords[i0]
                     pixels = through_pixels(p0, p1, step_size=step_size)
 
-                pixels_truncated = truncate_pixels(pixels.to(t.int16), [y, x])
+                pixels_truncated = truncate_pixels(pixels.to(t.int16), [y - 1, x - 1])
                 t_pixels[idx, :, : pixels_truncated.size(1)] = pixels_truncated
 
                 progress_bar.update(1)

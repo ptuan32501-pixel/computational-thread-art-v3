@@ -94,20 +94,15 @@ demo_presets = {
         "nodes": 320,
         "shape": "Rectangle",
         "random_lines": 140,
-        "darkness": {
-            "white": 0.16,
-            "orange": 0.16,
-            "red": 0.16,
-            "black": 0.16,
-        },
+        "darkness": [0.16, 0.16, 0.16, 0.16],
         "blur": 4,
         "group_orders": "5",
-        "palette": {
-            "white": [255, 255, 255],
-            "orange": [255, 130, 0],
-            "red": [255, 0, 0],
-            "black": [0, 0, 0],
-        },
+        "palette": [
+            (255, 255, 255),  # white
+            (255, 130, 0),  # orange
+            (255, 0, 0),  # red
+            (0, 0, 0),  # black
+        ],
         "lines": [2700, 2000, 650, 5200],
         "html_x": 700,
     },
@@ -118,20 +113,15 @@ demo_presets = {
         "nodes": 400,
         "shape": "Rectangle",
         "random_lines": 200,
-        "darkness": {
-            "black": 0.12,
-            "white": 0.12,
-            "orange": 0.12,
-            "red": 0.12,
-        },
+        "darkness": [0.12, 0.12, 0.12, 0.12],
         "blur": 4,
         "group_orders": "8",
-        "palette": {
-            "white": [255, 255, 255],
-            "orange": [255, 130, 0],
-            "red": [255, 0, 0],
-            "black": [0, 0, 0],
-        },
+        "palette": [
+            (255, 255, 255),  # white
+            (255, 130, 0),  # orange
+            (255, 0, 0),  # red
+            (0, 0, 0),  # black
+        ],
         "lines": [5400, 4000, 2000, 9500],
         "html_x": 800,
         "html_line_width": 0.11,
@@ -143,22 +133,16 @@ demo_presets = {
         "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 180,
-        "darkness": {
-            "white": 0.14,
-            "light_blue": 0.14,
-            "mid_blue": 0.10,
-            "dark_blue": 0.11,
-            "black": 0.10,
-        },
+        "darkness": [0.14, 0.14, 0.10, 0.11, 0.10],
         "blur": 4,
-        "group_orders": "wdlbwdmlbwdmlbmb",
-        "palette": {
-            "white": [255, 255, 255],
-            "light_blue": [0, 215, 225],
-            "mid_blue": [0, 120, 240],
-            "dark_blue": [0, 0, 120],
-            "black": [0, 0, 0],
-        },
+        "group_orders": "1,4,2,5,1,4,3,2,5,1,4,3,2,5,3,5",
+        "palette": [
+            (255, 255, 255),  # white
+            (0, 215, 225),  # light_blue
+            (0, 120, 240),  # mid_blue
+            (0, 0, 120),  # dark_blue
+            (0, 0, 0),  # black
+        ],
         "lines": [1400, 750, 750, 3000, 6500],
         "html_x": 1100,
     },
@@ -169,22 +153,16 @@ demo_presets = {
         "nodes": 400,
         "shape": "Rectangle",
         "random_lines": 240,
-        "darkness": {
-            "white": 0.14,
-            "light_blue": 0.13,
-            "mid_blue": 0.10,
-            "dark_blue": 0.10,
-            "black": 0.10,
-        },
+        "darkness": [0.14, 0.13, 0.10, 0.10, 0.10],
         "blur": 4,
-        "group_orders": "wdlbwdmlbwdmlbmb",
-        "palette": {
-            "white": [255, 255, 255],
-            "light_blue": [0, 215, 225],
-            "mid_blue": [0, 120, 240],
-            "dark_blue": [0, 0, 120],
-            "black": [0, 0, 0],
-        },
+        "group_orders": "1,4,2,5,1,4,3,2,5,1,4,3,2,5,3,5",
+        "palette": [
+            (255, 255, 255),  # white
+            (0, 215, 225),  # light_blue
+            (0, 120, 240),  # mid_blue
+            (0, 0, 120),  # dark_blue
+            (0, 0, 0),  # black
+        ],
         "lines": [1600, 900, 850, 3300, 8000],
         "html_x": 1200,
         "html_line_width": 0.11,
@@ -196,20 +174,15 @@ demo_presets = {
         "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 150,
-        "darkness": {
-            "white": 0.12,
-            "yellow": 0.12,
-            "red": 0.12,
-            "black": 0.12,
-        },
+        "darkness": [0.12, 0.12, 0.12, 0.12],
         "blur": 4,
-        "group_orders": "wrywrybwrybrybrbb",
-        "palette": {
-            "white": [255, 255, 255],
-            "red": [255, 0, 0],
-            "yellow": [255, 255, 0],
-            "black": [0, 0, 0],
-        },
+        "group_orders": "1,2,3,1,2,3,4,1,2,3,4,2,3,4,2,4,4",
+        "palette": [
+            (255, 255, 255),  # white
+            (255, 0, 0),  # red
+            (255, 255, 0),  # yellow
+            (0, 0, 0),  # black
+        ],
         "lines": [1800, 800, 1800, 8000],
         "html_x": 1000,
     },
@@ -220,20 +193,15 @@ demo_presets = {
         "nodes": 360,
         "shape": "Ellipse",
         "random_lines": 200,
-        "darkness": {
-            "white": 0.28,
-            "orange": 0.25,
-            "mid_blue": 0.28,
-            "black": 0.25,
-        },
+        "darkness": [0.28, 0.25, 0.28, 0.25],
         "blur": 4,
-        "group_orders": "wwoombwombb",
-        "palette": {
-            "white": [255, 255, 255],
-            "orange": [255, 100, 0],
-            "mid_blue": [50, 150, 220],
-            "black": [0, 0, 0],
-        },
+        "group_orders": "1,1,2,2,3,4,1,2,3,4,4",
+        "palette": [
+            (255, 255, 255),  # white
+            (255, 100, 0),  # orange
+            (50, 150, 220),  # mid_blue
+            (0, 0, 0),  # black
+        ],
         "lines": [500, 1900, 2100, 3300],
         "html_x": 850,
     },
@@ -244,15 +212,15 @@ demo_presets = {
         "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 160,
-        "darkness": {"white": 0.12, "yellow": 0.12, "red": 0.12, "black": 0.14},
+        "darkness": [0.12, 0.12, 0.12, 0.14],
         "blur": 2,
-        "group_orders": "wwyyrrbwyrbwyrbwyrbbb",
-        "palette": {
-            "white": [255, 255, 255],
-            "yellow": [255, 255, 0],
-            "red": [255, 0, 0],
-            "black": [0, 0, 0],
-        },
+        "group_orders": "1,1,2,2,3,3,4,1,2,3,4,1,2,3,4,1,2,3,4,4,4",
+        "palette": [
+            (255, 255, 255),  # white
+            (255, 255, 0),  # yellow
+            (255, 0, 0),  # red
+            (0, 0, 0),  # black
+        ],
         "lines": [1300, 1500, 1200, 11500],
         "html_x": 1000,
     },
@@ -264,24 +232,17 @@ demo_presets = {
         "nodes": 360,
         "shape": "Rectangle",
         "random_lines": 180,
-        "darkness": {
-            "white": 0.21,
-            "yellow": 0.21,
-            "mid_blue": 0.21,
-            "red": 0.21,
-            "dark_brown": 0.21,
-            "black": 0.14,
-        },
+        "darkness": [0.21, 0.21, 0.21, 0.21, 0.21, 0.14],
         "blur": 2,
-        "group_orders": "wwwyyyrrmmwyrrmdbymrddbbb",
-        "palette": {
-            "white": [255, 255, 255],
-            "yellow": [230, 200, 80],
-            "mid_blue": [0, 50, 200],
-            "red": [255, 0, 0],
-            "dark_brown": [140, 60, 0],
-            "black": [0, 0, 0],
-        },
+        "group_orders": "1,1,1,2,2,2,4,4,3,3,1,2,4,4,3,5,6,2,3,4,5,5,6,6,6",
+        "palette": [
+            (255, 255, 255),  # white
+            (230, 200, 80),  # yellow
+            (0, 50, 200),  # mid_blue
+            (255, 0, 0),  # red
+            (140, 60, 0),  # dark_brown
+            (0, 0, 0),  # black
+        ],
         "lines": [750, 900, 500, 450, 1200, 9200],
         "html_x": 1200,
     },
@@ -358,6 +319,7 @@ with st.sidebar:
             min_value=100,
             max_value=1400,
             value=preset_x or 600,
+            help="The width we reshape the image to before creating the art. Higher-width images take more time (and require more lines) but will look better.",
         )
     with col2:
         n_nodes = st.number_input(
@@ -398,23 +360,21 @@ with st.sidebar:
         group_orders = st.text_input(
             "Group Orders",
             value=preset_group_orders or "4",
-            help="""Sequence of first letters of each color, repeated. For example, 'orborb' means we draw the image in the following order: 50% orange, 50% red, 50% black, 50% orange, 50% red, 50% black lines. We recommend about 4 cycles through the colors, with darker colors coming last (so the final lines drawn on top of the image are black).
-            
-You can optionally just put a number, in which case it'll cycle through all the colors from lightest to darkest that many times.""",
+            help="""Sequence we'll use to put the colors on the image. If this is a comma-separated list of integers, they are interpreted as the indices of colors you've listed, e.g. '1,2,3,1,2,3' for colors (white, red, black) means we'd add half the white lines, then half the red lines, then half the white again, then half the red again, then all black lines. Alternatively, you can just use a number e.g. '4' meaning we add 1/4 of all color lines, then loop through our colors 4 times.
+
+We recommend looping at least 2-3 times (otherwise e.g. all the red lines might be on top and block out the other lines). Also, we recommend dark colors going on last (so the final lines drawn on top of the image are black), this often makes images look better.""",
         )
 
     # Color management
     st.subheader("Colors")
 
     if preset_palette:
-        colors = list(preset_palette.keys())
-        color_values = list(preset_palette.values())
+        palette = list(preset_palette)
         n_lines = preset_lines
-        darkness_values = list(preset_darkness.values())
+        darkness_values = list(preset_darkness)
     else:
         # Default to 3 colors if custom
-        colors = ["black", "red", "white"]
-        color_values = [[0, 0, 0], [255, 0, 0], [255, 255, 255]]
+        palette = [(0, 0, 0), (255, 0, 0), (255, 255, 255)]
         n_lines = [1000, 800, 600]
         darkness_values = [0.17, 0.17, 0.17]
 
@@ -423,53 +383,42 @@ You can optionally just put a number, in which case it'll cycle through all the 
         "Number of Colors",
         min_value=1,
         max_value=10,
-        value=len(colors),
+        value=len(palette),
         help="We recommend always including black and white, as well as between 1 and 4 other colors depending on your image. There should usually be a larger number of darker colored lines than most other colors (but again this depends on the image).",
     )
 
-    if num_colors != len(colors):
-        if num_colors > len(colors):
+    num_colors_current = len(palette)
+    if num_colors != num_colors_current:
+        if num_colors > num_colors_current:
             # Add more colors
-            for i in range(len(colors), num_colors):
-                colors.append(f"color_{i + 1}")
-                color_values.append([128, 128, 128])  # Default to gray
+            for i in range(num_colors_current, num_colors):
+                palette.append([128, 128, 128])  # Default to gray
                 n_lines.append(1000)  # Default number of lines
                 darkness_values.append(0.17)
         else:
             # Remove colors
-            colors = colors[:num_colors]
-            color_values = color_values[:num_colors]
+            palette = palette[:num_colors]
             n_lines = n_lines[:num_colors]
             darkness_values = darkness_values[:num_colors]
 
     # Color editors
-    new_colors = []
-    new_color_values = []
+    new_palette = []
     new_n_lines = []
     new_darkness = []
 
     for i in range(num_colors):
         # st.markdown(f"##### Color {i + 1}")
-        col1, col2, col3, col4 = st.columns([3, 2, 3, 4])
+        col1, col2, col3 = st.columns([1, 2, 2])
 
         with col1:
-            color_name = st.text_input(
-                "Name",
-                value=colors[i],
-                key=f"color_name_{i}",
-                help="Make sure to give the colors names that don't start with the same letter (otherwise later code will get confused).",
-            )
-            # TODO - fix this behaviour
-
-        with col2:
             color_hex = st.color_picker(
                 "Color",
-                f"#{color_values[i][0]:02x}{color_values[i][1]:02x}{color_values[i][2]:02x}",
+                f"#{palette[i][0]:02x}{palette[i][1]:02x}{palette[i][2]:02x}",
                 key=f"color_pick_{i}",
             )
             r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
 
-        with col3:
+        with col2:
             lines = st.number_input(
                 "Lines",
                 min_value=100,
@@ -479,7 +428,7 @@ You can optionally just put a number, in which case it'll cycle through all the 
                 help="The total number of lines we'll draw for this color. Make sure this is larger for the darker colors, but other than that it should roughly be in proportion with the color density in your reference image.",
             )
 
-        with col4:
+        with col3:
             darkness = st.number_input(
                 "Darkness",
                 min_value=0.05,
@@ -490,21 +439,14 @@ You can optionally just put a number, in which case it'll cycle through all the 
                 help="The float value we'll subtract from pixels after each line is drawn (maximum-darkness pixels start at the value of 1.0). Smaller values here mean higher contrast (because we put more lines in the dark areas before moving to the light areas).",
             )
 
-        new_colors.append(color_name)
-        new_color_values.append([r, g, b])
+        new_palette.append([r, g, b])
         new_n_lines.append(lines)
         new_darkness.append(darkness)
 
     # Update colors and lines
-    colors = new_colors
-    color_values = new_color_values
+    palette = new_palette
     n_lines = new_n_lines
-    darkness = {colors[i]: new_darkness[i] for i in range(len(colors))}
-
-    # Check if colors have the same first letter; throw a warning if they do
-    first_letters = [color[0] for color in colors]
-    if len(first_letters) != len(set(first_letters)):
-        st.error("Warning: some color names have the same first letter. Please ensure all color names are unique.")
+    darkness = new_darkness
 
     # HTML output options
     st.subheader("Output")
@@ -554,8 +496,8 @@ if generate_button:
     #     st.error("Please upload an image or select a demo.")
     #     st.stop()
 
-    # Create palette dictionary
-    palette = {colors[i]: color_values[i] for i in range(len(colors))}
+    # TODO - why is this necessary?
+    palette = [tuple(color) for color in palette]
 
     # Display a status message
     try:

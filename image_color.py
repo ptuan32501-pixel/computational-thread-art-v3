@@ -6,6 +6,7 @@ import copy
 import json
 import math
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generator, Literal, Optional, Tuple
@@ -45,7 +46,7 @@ class ThreadArtColorParams:
     n_nodes: int | tuple
     filename: str | None  # if this is None, you need to supply `image`
     w_filename: str | None
-    palette: dict[str, tuple[int, int, int]]
+    palette: list[tuple[int, int, int]]
     n_lines_per_color: list[int]
     n_random_lines: int | Literal["all"]
     darkness: float | dict[str, float]
@@ -63,7 +64,7 @@ class ThreadArtColorParams:
     seed: int = 0
     pixels_per_batch: int = 32
     num_overlap_rows: int = 6
-    other_colors_weighting: dict = field(default_factory=dict)
+    other_colors_weighting: list[list[float]] = field(default_factory=list)
     # ^ can be e.g. {"white": 0.1, "*": 0.2} to give all other colors 0.2 weighting but white 0.1
     image: Image.Image | None = None
     # ^ for streamlit page, passing through uploaded image not filename
@@ -74,19 +75,18 @@ class ThreadArtColorParams:
 
     def __post_init__(self):
         t0 = time.time()
-        self.color_names = list(self.palette.keys())
-        self.color_values = list(self.palette.values())
-        first_color_letters = [
-            color[0] for color, _ in sorted(self.palette.items(), key=lambda item: sum(item[1]), reverse=True)
-        ]
-        assert len(set(first_color_letters)) == len(first_color_letters), (
-            "First letter of each color name must be unique."
-        )
 
-        if isinstance(self.group_orders, str) and self.group_orders.isdigit():
-            self.group_orders = int(self.group_orders)
-        if isinstance(self.group_orders, int):
-            self.group_orders = "".join(first_color_letters) * self.group_orders
+        # Group orders is either 4 or "4" (indicating 4 copies of the colors in order), or something like "1,2,3,4,3,4"
+        # indicating we do all of the 1st color, then all of the 2nd, then 50% of the 3rd, etc. We only work with the
+        # `group_orders_list` object, since that's easier.
+        self.group_orders = str(self.group_orders)
+        if self.group_orders.isdigit():
+            self.group_orders_list = list(range(len(self.palette))) * int(self.group_orders)
+        else:
+            assert all(x.isdigit() for x in self.group_orders.split(",")), (
+                f"Invalid group orders: {self.group_orders}. Must be a number or comma-separated list of numbers."
+            )
+            self.group_orders_list = [int(i) - 1 for i in self.group_orders.split(",")]
 
         # Load in real image, also gets us the width and height
         if self.image is None:
@@ -121,12 +121,7 @@ class ThreadArtColorParams:
                 s = f"<code>{'&nbsp;' * 13}palette : </code>" + palette_to_html(v.keys())
                 display(HTML(s))
             elif k == "group_orders":
-                assert isinstance(v, str)
-                color_first_letter_to_index = {color_name[0]: i for i, color_name in enumerate(self.palette.keys())}
-                # TODO - fix this, it won't work
-                color_list = [list(self.palette)[color_first_letter_to_index[char]] for char in v]
-                s = f"<code>{'&nbsp;' * 8}group_orders : </code>" + palette_to_html(color_list)
-                display(HTML(s))
+                raise NotImplementedError()
             elif not (k.startswith("color")):
                 print(f"{k:>22} : {v}")
         return ""
@@ -154,7 +149,6 @@ class Img:
         self.save_dir = ROOT_PATH / "outputs" / args.name
         self.x = args.x
         self.y = args.y
-        self.palette = {color_name: tuple(color_value) for color_name, color_value in args.palette.items()}
 
         # Get base image (and also image converted to monochrome)
         base_image = (args.image or Image.open(self.filename)).resize((self.x, self.y))
@@ -162,12 +156,14 @@ class Img:
         self.imageBW = t.tensor((base_image).convert(mode="L").getdata()).reshape((self.y, self.x))
 
         # Get the monochrome images (i.e. the ones we're using for specific colors)
-        self.imagesMono = {}
-        for color_name, filename in args.mono_filenames.items():
-            base_image_mono = Image.open(ROOT_PATH / f"images/{filename}").resize((self.x, self.y))
-            self.imagesMono[color_name] = (
-                t.tensor((base_image_mono).convert(mode="L").getdata()).reshape((self.y, self.x)) / 255
-            )
+        if args.mono_filenames:
+            raise NotImplementedError()
+            # self.imagesMono = {}
+            # for color_name, filename in args.mono_filenames.items():
+            #     base_image_mono = Image.open(ROOT_PATH / f"images/{filename}").resize((self.x, self.y))
+            #     self.imagesMono[color_name] = (
+            #         t.tensor((base_image_mono).convert(mode="L").getdata()).reshape((self.y, self.x)) / 255
+            #     )
 
         # Process the importance weighting (we'll apply this to all images)
         self.w = None
@@ -182,19 +178,21 @@ class Img:
         #     self.wneg = 1 - (t.tensor((base_image_wneg).convert(mode="L").getdata()).reshape((self.y, self.x)) / 255)
 
         self.w_restriction = None
+
         if args.palette_restriction:
-            self.w_restriction_filename = ROOT_PATH / f"images/{args.palette_restriction['filename']}"
-            base_image_w = Image.open(self.w_restriction_filename).resize((self.x, self.y))
-            self._w_restriction = 1 - (
-                t.tensor((base_image_w).convert(mode="L").getdata()).reshape((self.y, self.x)) / 255
-            )
-            # Convert self.w_restriction into shape (palette, y, x) with 1 in the illegal colors & positions
-            self.w_restriction = t.zeros((self.y, self.x, len(args.palette)))
-            for (lower, upper), filter_fn in args.palette_restriction["filters"].items():
-                mask_to_apply_filter = (self._w_restriction >= lower) & (self._w_restriction <= upper)
-                for j, color_name in enumerate(self.palette.keys()):
-                    if not filter_fn(color_name):
-                        self.w_restriction[..., j][mask_to_apply_filter] = 1.0
+            raise NotImplementedError()
+            # self.w_restriction_filename = ROOT_PATH / f"images/{args.palette_restriction['filename']}"
+            # base_image_w = Image.open(self.w_restriction_filename).resize((self.x, self.y))
+            # self._w_restriction = 1 - (
+            #     t.tensor((base_image_w).convert(mode="L").getdata()).reshape((self.y, self.x)) / 255
+            # )
+            # # Convert self.w_restriction into shape (palette, y, x) with 1 in the illegal colors & positions
+            # self.w_restriction = t.zeros((self.y, self.x, len(args.palette)))
+            # for (lower, upper), filter_fn in args.palette_restriction["filters"].items():
+            #     mask_to_apply_filter = (self._w_restriction >= lower) & (self._w_restriction <= upper)
+            #     for j, color_name in enumerate(self.palette.keys()):
+            #         if not filter_fn(color_name):
+            #             self.w_restriction[..., j][mask_to_apply_filter] = 1.0
 
         # ! Dither the images
         # This does dithering by batch, i.e. it arranges the 3D image into 4D and vectorizes the operation
@@ -207,16 +205,6 @@ class Img:
 
         print(f"Other init operations complete in {time.time() - t0 - t_FS:.2f} seconds")
 
-    def save(self):
-        """Saves the individual dithered images."""
-        t0 = time.time()
-        for color_name, mono_image in self.mono_images_dict.items():
-            img = Image.fromarray(mono_image.numpy().astype(np.uint8) * 255)
-            img.save(self.save_dir / f"dithered_{color_name}.png")
-        img = Image.fromarray(self.image_dithered.numpy().astype(np.uint8))
-        img.save(self.save_dir / "dithered.png")
-        print(f"Saved images in {time.time() - t0:.2f} seconds")
-
     # Performs FS-dithering with progress bar, returns the output (called in __init__)
     def FS_dither(
         self,
@@ -225,7 +213,7 @@ class Img:
     ) -> Tuple[Tensor, float]:
         t_FS = time.time()
 
-        image_dithered: Float[Tensor, "y x 3"] = self.imageRGB.clone().to(t.float)
+        image_dithered: Float[Tensor, "y x 3"] = self.imageRGB.clone().float()
         y, x = image_dithered.shape[:2]
 
         image_palette_restriction = None
@@ -302,12 +290,13 @@ class Img:
         ABC = t.tensor([3, 5, 1]) / 16
         BC = t.tensor([5, 1]) / 16
 
-        # We don't use the colors in `imagesMono` for dithering; they have their own mono images we get the lines from
-        palette_subset = {name: color for name, color in self.palette.items() if name not in self.imagesMono}
-        palette = t.tensor(list(palette_subset.values())).to(t.float)  # [palette 3]
+        # # We don't use the colors in `imagesMono` for dithering; they have their own mono images we get the lines from
+        # palette_subset = {name: color for name, color in self.palette.items() if name not in self.imagesMono}
+        # palette = t.tensor(list(palette_subset.values())).float()  # [palette 3]
+        palette = t.tensor(self.args.palette).float()  # [palette 3]
 
         # Set up stuff
-        palette_sq = einops.rearrange(palette, "palette rgb3 -> palette 1 rgb3")
+        palette_sq = einops.rearrange(palette, "palette rgb -> palette 1 rgb")
         t0 = time.time()
         y, x, batch = image_dithered.shape[:3]
         is_clamp = "clamp" in self.dithering_params
@@ -315,7 +304,7 @@ class Img:
         # loop over each row, from first to second last
         pbar = tqdm(range(y - 1), desc="Floyd-Steinberg dithering")
         for y_ in pbar:
-            row = image_dithered[y_].to(t.float)  # [x batch 3]
+            row = image_dithered[y_].float()  # [x batch 3]
             next_row = t.zeros_like(row)  # [x batch 3]
 
             # deal with the first pixel in the row
@@ -398,13 +387,13 @@ class Img:
             color_continuous_scale="gray",
             animation_frame=0,
         ).update_layout(coloraxis_showscale=False)
-        fig.layout.sliders[0].currentvalue.prefix = "color = "  # type: ignore
-        for i, color_name in enumerate(self.palette.keys()):
-            fig.layout.sliders[0].steps[i].label = color_name  # type: ignore
+        fig.layout.sliders[0].currentvalue.prefix = "color = "
+        for i, color_tuple in enumerate(self.args.palette):
+            fig.layout.sliders[0].steps[i].label = str(color_tuple)
         fig.show()
 
     # Takes FS output and returns a dictionary of monochromatic images (called in __init__)
-    def generate_mono_images_dict(self, other_colors_weighting: dict[str, dict[str, float]]):
+    def generate_mono_images_dict(self, other_colors_weighting: list[list[float]]):
         # Note - this function used to use the `t_pixels` tensor to only get the pixels which a line runs through,
         # but since this is just for a histogram, doing that is totally not relevant (and also doesn't change things
         # much as long as your image is high-res).
@@ -414,59 +403,61 @@ class Img:
         d_mono_images_post = dict()  # mono-color images, after processing (i.e. adding weight to nearby colors)
 
         # For each color, get its boolean map in the dithered image, and calculate the histogram
-        for color_name, color_value in self.palette.items():
+        for color_tuple in self.args.palette:
             # Case 1: color doesn't have its own dedicated monoImage
-            if color_name not in self.imagesMono:
-                mono_image = (get_img_hash(self.image_dithered) == get_color_hash(t.tensor(color_value))).to(t.int)
-                d_mono_images_pre[color_name] = mono_image
-                d_histogram[color_name] = mono_image.sum() / mono_image.numel()
-            else:
-                mono_image = self.imagesMono[
-                    color_name
-                ]  # it's already a 2D monochrome image, with black = important areas
-                d_mono_images_pre[color_name] = mono_image
-                d_histogram[color_name] = mono_image.sum() / mono_image.numel()
+            # if color_name not in self.imagesMono:
+            mono_image = (get_img_hash(self.image_dithered) == get_color_hash(t.tensor(color_tuple))).int()
+            d_mono_images_pre[color_tuple] = mono_image
+            d_histogram[color_tuple] = mono_image.sum() / mono_image.numel()
+            # else:
+            #     mono_image = self.imagesMono[
+            #         color_name
+            #     ]  # it's already a 2D monochrome image, with black = important areas
+            #     d_mono_images_pre[color_name] = mono_image
+            #     d_histogram[color_name] = mono_image.sum() / mono_image.numel()
 
         # Renormalize d_histogram (because if we used mono images for specific colors, then they won't sum to 1)
         nTotal = sum(d_histogram.values())
-        d_histogram = {color_name: n / nTotal for color_name, n in d_histogram.items()}
+        d_histogram = {color_tuple: n / nTotal for color_tuple, n in d_histogram.items()}
 
         # Use `other_colors_weighting`, converting the mono images into linear multiples of themselves
-        valid_keys = list(self.palette.keys()) + ["*"]
-        for base_color_name in self.palette.keys():
-            d_mono_images_post[base_color_name] = d_mono_images_pre[base_color_name].clone().to(t.float)
-            if base_color_name in other_colors_weighting:
-                w = other_colors_weighting[base_color_name]
-                assert all(key in valid_keys for key in w), f"Invalid keys in other_colors_weighting: {w.keys()}"
-                for adj_color_name in self.palette.keys():
-                    if adj_color_name != base_color_name:
-                        adj_color_sf = w.get(adj_color_name, w.get("*", 0.0))
-                        d_mono_images_post[base_color_name] += adj_color_sf * d_mono_images_pre[adj_color_name]
+        if other_colors_weighting:
+            assert len(other_colors_weighting) == len(self.args.palette), (
+                "Should either give full list for other_colors_weighting (with optional empty elems) or empty list"
+            )
+            for i, base_color in enumerate(self.args.palette):
+                d_mono_images_post[base_color] = sum(
+                    d_mono_images_pre[adj_color].clone().float() * adj_coeff
+                    for adj_color, adj_coeff in zip(self.args.palette, other_colors_weighting[i])
+                )
+        else:
+            d_mono_images_post = d_mono_images_pre
 
         self.color_histogram = d_histogram
         self.mono_images_dict = d_mono_images_post
 
     # Prints a suggested number of lines, in accordance with histogram frequencies (used in Juypter Notebook)
     def decompose_image(self, n_lines_total=10000):
-        table = Table("Color", "Name", "Example", "Lines")
+        table = Table("Color", "Example", "Lines")
 
-        n_lines_per_color = [int(self.color_histogram[color] * n_lines_total) for color in self.palette]
+        n_lines_per_color = [
+            int(self.color_histogram[color_tuple] * n_lines_total) for color_tuple in self.args.palette
+        ]
 
         # If we don't have the right sum, add more lines to the darkest color
         darkest_idx = [
             i
-            for i, (_, color_values) in enumerate(self.palette.items())
-            if sum(color_values) == max([sum(cv) for cv in self.palette.values()])
+            for i, color_tuple in enumerate(self.args.palette)
+            if sum(color_tuple) == max([sum(cv) for cv in self.args.palette])
         ][0]
         n_lines_per_color[darkest_idx] += n_lines_total - sum(n_lines_per_color)
 
-        for idx, (color_name, color_value) in enumerate(self.palette.items()):
-            color_value_str_spaced = "(" + ",".join([f"{x:>3}" for x in color_value]) + ")"
-            color_value_str_stripped = color_value_str_spaced.replace(" ", "")
+        for idx, color_tuple in enumerate(self.args.palette):
+            color_tuple_str_spaced = "(" + ",".join([f"{x:>3}" for x in color_tuple]) + ")"
+            color_tuple_str_stripped = color_tuple_str_spaced.replace(" ", "")
             table.add_row(
-                color_value_str_spaced,
-                color_name,
-                f"[rgb{color_value_str_stripped}]████████[/]",
+                color_tuple_str_spaced,
+                f"[rgb{color_tuple_str_stripped}]████████[/]",
                 str(n_lines_per_color[idx]),
             )
 
@@ -474,8 +465,6 @@ class Img:
 
     # Creates the actual art
     def create_canvas(self) -> dict[str, list[tuple[int, int]]]:
-        from collections import defaultdict
-
         line_dict = defaultdict(list)
         for color, i, j in self.create_canvas_generator():
             line_dict[color].append((i, j))
@@ -483,36 +472,33 @@ class Img:
         return line_dict
 
     def create_canvas_generator(self) -> Generator:
-        assert len(self.palette) == len(self.args.n_lines_per_color), (
+        assert len(self.args.palette) == len(self.args.n_lines_per_color), (
             "Palette and lines per color don't match. Did you change the palette without re-updating params?"
         )
         t0 = time.time()
         line_dict = dict()
 
-        # TODO - explain how you can pass a dict of darkness values, not just a float (and use case for this - black planets)
-        if isinstance(self.args.darkness, float):
-            darkness_dict = {color_name: self.args.darkness for color_name in self.palette.keys()}
-        elif isinstance(self.args.darkness, dict):
-            darkness_dict = self.args.darkness
-            if "*" in darkness_dict:
-                star_value = darkness_dict.pop("*")
-                for color_name in self.palette.keys():
-                    darkness_dict[color_name] = darkness_dict.get(color_name, star_value)
+        darkness = (
+            self.args.darkness
+            if isinstance(self.args.darkness, list)
+            else [self.args.darkness] * len(self.args.palette)
+        )
 
         mono_image_dict = {
-            color: blur_image(mono_image, self.args.blur_rad) for color, mono_image in self.mono_images_dict.items()
+            color_tuple: blur_image(mono_image, self.args.blur_rad)
+            for color_tuple, mono_image in self.mono_images_dict.items()
         }
 
         # Setting a random seed at the start of this function ensures the lines will be the same (unless params change)
         global_random_seed(self.args.seed)
 
         pbar = tqdm(desc="Creating canvas", total=sum(self.args.n_lines_per_color))
-        for color_idx, color_name in enumerate(self.palette.keys()):
+        for color_idx, color_tuple in enumerate(self.args.palette):
             # Setup variables (including the place we'll start)
             n_lines = self.args.n_lines_per_color[color_idx]
-            m_image = mono_image_dict[color_name]
+            m_image = mono_image_dict[color_tuple]
 
-            pbar.set_postfix_str(f"Current color: {color_name}")
+            pbar.set_postfix_str(f"Current color: {color_tuple}")
 
             # Choose starting node (i.e. the first node to draw a line from)
             i = np.random.choice(list(self.args.d_joined.keys())).item()
@@ -524,13 +510,13 @@ class Img:
                     i=i,
                     w=self.w,
                     n_random_lines=self.args.n_random_lines,
-                    darkness=darkness_dict[color_name],
+                    darkness=darkness[color_idx],
                     d_joined=self.args.d_joined,
                     t_pixels=self.args.t_pixels,
                     n_nodes=self.args.n_nodes,
                 )
-                # > line_dict[color_name].append((i, j))
-                yield color_name, i, j
+                # > line_dict[color_tuple].append((i, j))
+                yield color_tuple, i, j
 
                 # Get the outgoing node (optionally jumping to a random non-consecutive node, for svg security)
                 i = j + 1 if (j % 2 == 0) else j - 1
@@ -606,22 +592,11 @@ class Img:
             with open(f"outputs/{self.args.name}/{self.args.name}.html", "w") as f:
                 f.write(html)
 
-        # Possibly sub a color for a different one
-        color_dict = {k: v for k, v in self.palette.items()}
-        for k, v in color_substitution.items():
-            assert k in color_dict, f"Color {k} not in palette."
-            color_dict[k] = v
-
-        # If group orders are integers, they should be turned into strings
-        if isinstance(self.args.group_orders, str):
-            group_orders_str = self.args.group_orders
-        else:
-            single_color_batch = "".join([color_name[0] for color_name in color_dict])
-            group_orders_str = single_color_batch * self.args.group_orders
-
-        # Now that we have group orders as a string, turn it into a list of color indices
-        d = {color_name[0]: idx for idx, color_name in enumerate(color_dict.keys())}
-        group_orders_list = [d[char] for char in group_orders_str]
+        # # Possibly sub a color for a different one
+        # color_dict = {k: v for k, v in self.palette.items()}
+        # for k, v in color_substitution.items():
+        #     assert k in color_dict, f"Color {k} not in palette."
+        #     color_dict[k] = v
 
         # Get progress bar stuff
         progress_bar = tqdm_notebook(
@@ -660,22 +635,16 @@ class Img:
             context.set_source_rgba(*bg_color)
             context.paint()
 
-            for i_idx, i in enumerate(group_orders_list):
-                color_name = list(color_dict.keys())[i]
-                color_value = color_dict[color_name]
-                lines = line_dict[color_name]
-                context.set_source_rgb(*[c / 255 for c in color_value])
+            for i_idx, i in enumerate(self.args.group_orders_list):
+                color_tuple = self.args.palette[i]
+                lines = line_dict[color_tuple]
+                context.set_source_rgb(*[c / 255 for c in color_tuple])
 
-                n_groups = len([j for j in group_orders_list if j == i])
-                group_order = len([j for j in group_orders_list[:i_idx] if j == i])
+                n_groups = len([j for j in self.args.group_orders_list if j == i])
+                group_order = len([j for j in self.args.group_orders_list[:i_idx] if j == i])
 
                 n = int(len(lines) / n_groups)
                 lines_to_draw = lines[::-1][n * group_order : n * (group_order + 1)]
-                # print(f"Setting color to {[c/255 for c in color_value]} for {len(lines_to_draw)} lines.")
-                # print(f"{i_idx+1:2}/{len(group_orders_list)}: {len(lines_to_draw):4} {color_name}")
-
-                # if verbose:
-                #     print(f"{i_idx + 1:2}/{len(group_orders_list)}: {len(lines_to_draw):4} {color_name}")
 
                 current_node = -1
 
@@ -702,10 +671,10 @@ class Img:
                 surface.write_to_png(str(self.save_dir / f"{img_name}.png"))
 
         if show_individual_colors:
-            for color_name, color_value in color_dict.items():
-                lines = line_dict[color_name]
+            for color_idx, color_tuple in enumerate(self.args.palette):
+                lines = line_dict[color_tuple]
                 with cairo.SVGSurface(
-                    str(self.save_dir / f"{img_name}_{color_name}.svg"),
+                    str(self.save_dir / f"{img_name}_{color_idx}.svg"),
                     x_output,
                     y_output,
                 ) as surface:
@@ -713,12 +682,11 @@ class Img:
                     context.scale(x_output, y_output)
                     context.set_line_width(0.0002 * line_width_multiplier)
                     # Set background color either black or white, whichever is more appropriate
-                    use_black_background = (sum(color_value) >= 255 * 2) or (color_name == "white")
+                    use_black_background = sum(color_tuple) >= 255 * 2
                     bg_color = [0.0, 0.0, 0.0] if use_black_background else [1.0, 1.0, 1.0]
-                    # print(color_name, sum(color_value), bg_color)  # TODO - remove
                     context.set_source_rgb(*bg_color)
                     context.paint()
-                    context.set_source_rgb(*[c / 255 for c in color_value])
+                    context.set_source_rgb(*[c / 255 for c in color_tuple])
 
                     current_node = -1
 
@@ -752,10 +720,8 @@ class Img:
         rand_perm: float = 0.0025,
         bg_color: tuple[int, int, int] = (0, 0, 0),
     ) -> str:
-        d = {color_name[0]: idx for idx, color_name in enumerate(self.args.palette.keys())}
-        group_orders_list = [d[char] for char in self.args.group_orders]
-        group_orders_total = {i: group_orders_list.count(i) for i in set(group_orders_list)}
-        group_orders_count = {i: 0 for i in set(group_orders_list)}
+        group_orders_total = {i: self.args.group_orders_list.count(i) for i in set(self.args.group_orders_list)}
+        group_orders_count = {i: 0 for i in set(self.args.group_orders_list)}
 
         # Calculate dimensions
         full_width = x
@@ -767,12 +733,12 @@ class Img:
         small_height = int(small_width * self.args.y / self.args.x)
 
         data = {
-            "line_dict": {k: v[::-1] for k, v in line_dict.items()},
             "d_coords": {int(k): [round(c, 2) for c in v.tolist()] for k, v in self.args.d_coords.items()},
-            "palette": self.args.palette,
-            "group_orders_list": group_orders_list,
+            "palette": [f"rgb{k}" for k in self.args.palette],
+            "group_orders_list": self.args.group_orders_list,
             "group_orders_total": group_orders_total,
             "group_orders_count": group_orders_count,
+            "line_dict": {f"rgb{k}": v[::-1] for k, v in line_dict.items()},
         }
 
         return f"""
