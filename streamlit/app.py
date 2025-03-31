@@ -68,11 +68,25 @@ st.markdown(
 
 # Header
 st.title("Thread Art Generator")
-st.markdown("Create beautiful thread art from images with customizable parameters.")
-st.markdown("You can upload your own image and select parameters using the menu on the left.")
 st.markdown(
-    "You can also choose a demo image to set the image & parameters, and scroll down to the 'Generate Thread Art' button to get started right away!"
+    """
+_Create beautiful thread art from images with customizable parameters!_
+
+You can create art in 2 ways:
+
+- Upload your own custom image and select parameters using the menu on the left
+- Choose a demo image from the dropdown at the top, which also pre-fills all the parameters for you
+
+Once you've chosen one of these options, you can hit the "Generate Thread Art" button at the bottom of the left hand menu, to create your thread art!
+
+Note that the quality of output varies a lot based on small parameter changes, so we encourage you to start by looking at some of the demos and see what works well for them, and then try and upload your own image. We've also included some helpful tips next to each input field to help you understand what they do.
+"""
 )
+# with st.expander("Some tips for creating good thread art"):
+#     st.markdown(
+# """
+# -
+# """)
 
 # Initialize session state
 if "generated_html" not in st.session_state:
@@ -346,7 +360,7 @@ with st.sidebar:
             min_value=10,
             max_value=500,
             value=preset_random_lines or 150,
-            help="Number of random lines to consider each time we draw a new line. More lines takes longer, but leads to a higher resolution image (although past about 150 you get diminishing returns).",
+            help="Number of random lines to consider each time we draw a new line. More lines takes longer, but leads to a better looking image (although past about 150 you get diminishing returns).",
         )
 
         blur_rad = st.number_input(
@@ -354,15 +368,16 @@ with st.sidebar:
             min_value=0,
             max_value=20,
             value=preset_blur or 4,
-            help="Amount we blur the monochrome images when we split them off from the main image. This usually doesn't matter much (but it can help to increase it if the lines seem too sharp and you want the color gradients to be smoother).",
+            help="Amount we blur the monochrome images when we split them off from the main image. You can try increasing this if the lines seem too sharp and you want the color gradients to be smoother, but mostly this doesn't have a big effect on the final output.",
         )
 
         group_orders = st.text_input(
             "Group Orders",
             value=preset_group_orders or "4",
-            help="""Sequence we'll use to put the colors on the image. If this is a comma-separated list of integers, they are interpreted as the indices of colors you've listed, e.g. '1,2,3,1,2,3' for colors (white, red, black) means we'd add half the white lines, then half the red lines, then half the white again, then half the red again, then all black lines. Alternatively, you can just use a number e.g. '4' meaning we add 1/4 of all color lines, then loop through our colors 4 times.
+            help="""Sequence we'll use to layer the colored lines onto the image. If this is a comma-separated list of integers, they are interpreted as the indices of colors you've listed, e.g. if our colors were white, red and black then '1,2,1,2,3' means we'd add half the white lines (1), then half the red lines (2), then half the white again (1), then half the red again (2), then all the black lines on top (3). Alternatively, if you just enter a single number then this will be interpreted as a number of loops over all colors, e.g. for three colors, '4' would be interpreted as the sequence '1,2,3,1,2,3,1,2,3,1,2,3'.
 
-We recommend looping at least 2-3 times (otherwise e.g. all the red lines might be on top and block out the other lines). Also, we recommend dark colors going on last (so the final lines drawn on top of the image are black), this often makes images look better.""",
+We have 2 main tips here: firstly make sure to include enough loops so that no one color dominates the other colors by going on top and masking them all, and secondly make sure the darker colors are on top since this looks a lot better (in particular, we strongly recommend having black on top).
+""",
         )
 
     # Color management
@@ -384,7 +399,7 @@ We recommend looping at least 2-3 times (otherwise e.g. all the red lines might 
         min_value=1,
         max_value=10,
         value=len(palette),
-        help="We recommend always including black and white, as well as between 1 and 4 other colors depending on your image. There should usually be a larger number of darker colored lines than most other colors (but again this depends on the image).",
+        help="We recommend always including black and white, as well as between 1 and 4 other colors depending on your image.",
     )
 
     num_colors_current = len(palette)
@@ -425,7 +440,7 @@ We recommend looping at least 2-3 times (otherwise e.g. all the red lines might 
                 max_value=15000,
                 value=n_lines[i],
                 key=f"lines_{i}",
-                help="The total number of lines we'll draw for this color. Make sure this is larger for the darker colors, but other than that it should roughly be in proportion with the color density in your reference image.",
+                help="The total number of lines we'll draw for this color. 3 guidelines to consider here: (1) the line numbers should be roughly in proportion with their density in your image, (2) you should make sure to include a lot of black lines for most images because that's an important component of making a good piece of thread art, and (3) you should aim for about 6000 - 20000 total lues when summed over all colors (the exact number depends on some of your other parameters, and how detailed you want the piece to be).",
             )
 
         with col3:
@@ -436,7 +451,7 @@ We recommend looping at least 2-3 times (otherwise e.g. all the red lines might 
                 value=darkness_values[i],
                 key=f"darkness_{i}",
                 step=0.01,
-                help="The float value we'll subtract from pixels after each line is drawn (maximum-darkness pixels start at the value of 1.0). Smaller values here mean higher contrast (because we put more lines in the dark areas before moving to the light areas).",
+                help="The float value we'll subtract from pixels after each line is drawn (pixels start at a maximum value of 1.0). Lines are constantly drawn through the regions whose pixels have the highest average value. Smaller values here will produce images with a higher contrast (because we draw more lines in the dark areas before moving to the light areas).",
             )
 
         new_palette.append([r, g, b])

@@ -49,24 +49,21 @@ data.palette.forEach((colorRGB, i) => {
         .style("background-color", backgroundColor);
 });
 
-// TODO - do we need a dictionary of scales, if all color scales are the same?
-// TODO - also combine this code with some of the code above?
-// Setup individual color SVGs and scales
+// TODO - combine this code with some of the code above?
+// Setup individual color SVGs (different for each color) and scales
 const svgs = {};
-const scalesX = {};
-const scalesY = {};
-
 data.palette.forEach((color, i) => {
     svgs[color] = d3.select("#canvas-" + i);
-    
-    scalesX[color] = d3.scaleLinear()
-        .domain([0, d3.max(Object.values(data.d_coords), d => d[1])])
-        .range([margin/2, smallWidth - margin/2]);
-        
-    scalesY[color] = d3.scaleLinear()
-        .domain([0, d3.max(Object.values(data.d_coords), d => d[0])])
-        .range([margin/2, smallHeight - margin/2]);
 });
+
+scaleX = d3.scaleLinear()
+    .domain([0, d3.max(Object.values(data.d_coords), d => d[1])])
+    .range([margin/2, smallWidth - margin/2]);
+    
+scaleY = d3.scaleLinear()
+    .domain([0, d3.max(Object.values(data.d_coords), d => d[0])])
+    .range([margin/2, smallHeight - margin/2]);
+    
 
 // Function for slicing list
 function getSlice(arr, x, y, color) {
@@ -138,10 +135,10 @@ function createAllLineElements() {
             .data(colorLinesWithIds[color], d => d.id)
             .enter()
             .append("line")
-            .attr("x1", d => scalesX[color](data.d_coords[d.coords[0]][1]) + (Math.random() * 2 * xPermSmall - xPermSmall))
-            .attr("y1", d => scalesY[color](data.d_coords[d.coords[0]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
-            .attr("x2", d => scalesX[color](data.d_coords[d.coords[1]][1]) + (Math.random() * 2 * xPermSmall - xPermSmall))
-            .attr("y2", d => scalesY[color](data.d_coords[d.coords[1]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
+            .attr("x1", d => scaleX(data.d_coords[d.coords[0]][1]) + (Math.random() * 2 * xPermSmall - xPermSmall))
+            .attr("y1", d => scaleY(data.d_coords[d.coords[0]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
+            .attr("x2", d => scaleX(data.d_coords[d.coords[1]][1]) + (Math.random() * 2 * xPermSmall - xPermSmall))
+            .attr("y2", d => scaleY(data.d_coords[d.coords[1]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
             .attr("stroke", d => d.color)
             .attr("stroke-width", lineWidth/2)
             .attr("visibility", "hidden") // Start with all lines hidden
