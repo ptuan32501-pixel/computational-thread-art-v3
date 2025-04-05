@@ -49,7 +49,7 @@ class ThreadArtColorParams:
     palette: list[tuple[int, int, int]]
     n_lines_per_color: list[int]
     n_random_lines: int | Literal["all"]
-    darkness: float | dict[str, float]
+    darkness: float | list[float]
     blur_rad: int
     group_orders: str | int
     mono_filenames: dict[str, str] = field(default_factory=dict)
@@ -541,7 +541,6 @@ class Img:
         fraction: tuple[float, float] | dict[str, tuple[float, float]] | None = None,
         background_color: Tuple[int, int, int] | None = (0, 0, 0),
         show_individual_colors: bool = False,
-        color_substitution: dict[str, tuple[int, int, int]] = {},
         line_width_multiplier: float = 1.0,
         png: bool = True,
         verbose: bool = False,
@@ -552,6 +551,7 @@ class Img:
         html_total_slider_steps: int = 150,
         html_rand_perm: float = 0.0025,
         html_bg_color: tuple[int, int, int] = (0, 0, 0),
+        html_color_names: list[str] = [],
     ):
         """
         Takes the line_dict, and uses it to create an svg of the output, then saves it
@@ -588,6 +588,7 @@ class Img:
                 steps_per_slider=html_total_slider_steps,
                 rand_perm=html_rand_perm,
                 bg_color=html_bg_color,
+                color_names=html_color_names,
             )
             with open(f"outputs/{self.args.name}/{self.args.name}.html", "w") as f:
                 f.write(html)
@@ -719,6 +720,7 @@ class Img:
         steps_per_slider: int = 150,
         rand_perm: float = 0.0025,
         bg_color: tuple[int, int, int] = (0, 0, 0),
+        color_names: list[str] = [],
     ) -> str:
         group_orders_total = {i: self.args.group_orders_list.count(i) for i in set(self.args.group_orders_list)}
         group_orders_count = {i: 0 for i in set(self.args.group_orders_list)}
@@ -757,6 +759,7 @@ const randPerm = {rand_perm};
 const nSteps = {steps_per_slider}; // Total number of steps
 const lineWidth = {line_width};
 const bgColor = 'rgb{bg_color}';
+const colorNames = {json.dumps(color_names)};
 
 const data = {json.dumps(data)};
 console.log(data);

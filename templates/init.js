@@ -4,7 +4,7 @@ const xPermSmall = randPerm * smallWidth;
 const yPermSmall = randPerm * smallHeight;        
 
 const margin = 0;
-const frameDuration = 50;
+const frameDuration = 25;
 
 // Setup full-color SVG and scales
 const fullSvg = d3.select("#full-canvas");
@@ -38,7 +38,7 @@ data.palette.forEach((colorRGB, i) => {
     colorContainer.append("div")
         .append("span")
         .attr("class", "plot-title")
-        .text(colorRGB);
+        .text(colorNames && colorNames.length > 0 ? colorNames[i] : colorRGB);
 
     // Add SVG for this color
     colorContainer.append("svg")
