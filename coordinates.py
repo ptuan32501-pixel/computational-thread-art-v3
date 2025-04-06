@@ -246,7 +246,8 @@ def build_through_pixels_dict(
 
         progress_bar = tqdm(
             desc="Building pixels dict",
-            total=sum([len(d_joined[i]) for i in d_joined]) // 2,
+            # total=sum([len(d_joined[i]) for i in d_joined]) // 2,
+            total=len(d_joined),
         )
 
         # Build archetypes only when needed and store them in a dictionary
@@ -271,7 +272,7 @@ def build_through_pixels_dict(
                     continue
 
                 # === first, check if they're opposite vertical, if so then populate using the archetypes ===
-                elif (d_sides[i], d_sides[j]) == (1, 3):
+                if (d_sides[i], d_sides[j]) == (1, 3):
                     # this makes sure the node with vertex 0 is seen as being on side 3, not side 0
                     if i == 0:
                         i_, j_ = j, n4
@@ -333,11 +334,13 @@ def build_through_pixels_dict(
                     pixels_truncated = truncate_pixels(pixels.to(t.int16), [y, x])
                     t_pixels[pair_to_index(i, j, n_nodes), :, : pixels_truncated.size(1)] = pixels_truncated
 
-                progress_bar.update(1)
+                # progress_bar.update(1)
                 if (n_lines_per_memory_clear is not None) and (random.random() < 1 / n_lines_per_memory_clear):
                     gc.collect()
+            progress_bar.update(1)
 
-        progress_bar.n = sum([len(d_joined[i]) for i in d_joined]) // 2
+        # progress_bar.n = sum([len(d_joined[i]) for i in d_joined]) // 2
+        progress_bar.n = len(d_joined)
 
     elif shape == "Ellipse":
         assert x % 2 == 0, "x must be even to take advantage of symmetry"
@@ -362,7 +365,8 @@ def build_through_pixels_dict(
             )
 
         # The second half are added via symmetry
-        total = sum([len(d_joined[i]) for i in d_joined]) // 4
+        # total = sum([len(d_joined[i]) for i in d_joined]) // 4
+        total = len(d_joined)
         progress_bar = tqdm(desc="Building pixels dict", total=total)
 
         for i1 in d_joined:
@@ -387,9 +391,10 @@ def build_through_pixels_dict(
                 pixels_truncated = truncate_pixels(pixels.to(t.int16), [y - 1, x - 1])
                 t_pixels[idx, :, : pixels_truncated.size(1)] = pixels_truncated
 
-                progress_bar.update(1)
+                # progress_bar.update(1)
                 if (n_lines_per_memory_clear is not None) and (random.random() < 1 / n_lines_per_memory_clear):
                     gc.collect()
+            progress_bar.update(1)
 
         if only_return_d_coords:
             return d_coords

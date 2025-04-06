@@ -76,18 +76,6 @@ class ThreadArtColorParams:
     def __post_init__(self):
         t0 = time.time()
 
-        # Group orders is either 4 or "4" (indicating 4 copies of the colors in order), or something like "1,2,3,4,3,4"
-        # indicating we do all of the 1st color, then all of the 2nd, then 50% of the 3rd, etc. We only work with the
-        # `group_orders_list` object, since that's easier.
-        self.group_orders = str(self.group_orders)
-        if self.group_orders.isdigit():
-            self.group_orders_list = list(range(len(self.palette))) * int(self.group_orders)
-        else:
-            assert all(x.isdigit() for x in self.group_orders.split(",")), (
-                f"Invalid group orders: {self.group_orders}. Must be a number or comma-separated list of numbers."
-            )
-            self.group_orders_list = [int(i) - 1 for i in self.group_orders.split(",")]
-
         # Load in real image, also gets us the width and height
         if self.image is None:
             self.image = Image.open(str(ROOT_PATH / "images" / self.filename))
@@ -110,6 +98,21 @@ class ThreadArtColorParams:
             debug=self.debug_through_pixels_dict,
         )
         print(f"ThreadArtColorParams.__init__ done in {time.time() - t0:.2f} seconds")
+
+    @property
+    def group_orders_list(self) -> list[int]:
+        # Group orders is either 4 or "4" (indicating 4 copies of the colors in order), or something like "1,2,3,4,3,4"
+        # indicating we do all of the 1st color, then all of the 2nd, then 50% of the 3rd, etc. We only work with the
+        # `group_orders_list` object, since that's easier.
+        self.group_orders = str(self.group_orders)
+        if self.group_orders.isdigit():
+            group_orders_list = list(range(len(self.palette))) * int(self.group_orders)
+        else:
+            assert all(x.isdigit() for x in self.group_orders.split(",")), (
+                f"Invalid group orders: {self.group_orders}. Must be a number or comma-separated list of numbers."
+            )
+            group_orders_list = [int(i) - 1 for i in self.group_orders.split(",")]
+        return group_orders_list
 
     def __repr__(self):
         for k, v in self.__dict__.items():
@@ -540,6 +543,7 @@ class Img:
         rand_perm: float = 0.0025,
         fraction: tuple[float, float] | dict[str, tuple[float, float]] | None = None,
         background_color: Tuple[int, int, int] | None = (0, 0, 0),
+        inner_background_color: Tuple[int, int, int] | None = None,
         show_individual_colors: bool = False,
         line_width_multiplier: float = 1.0,
         png: bool = True,
@@ -632,9 +636,18 @@ class Img:
             context.scale(x_output, y_output)
             context.set_line_width(0.0002 * line_width_multiplier)
 
+            # If background color is specified, set it everywhere
             bg_color = [0.0, 0.0, 0.0, 0.0] if background_color is None else [c / 255 for c in background_color]
             context.set_source_rgba(*bg_color)
             context.paint()
+
+            # If inner background color is specified, set it inside the circle
+            if inner_background_color is not None:
+                inner_bg_color = [c / 255 for c in inner_background_color]
+                context.set_source_rgba(*inner_bg_color)  # set bg color
+                context.arc(0.5, 0.5, 0.495, 0, 2 * math.pi)  # draw circle as 360-deg arc
+                context.clip()  # clip to circle region we just drew
+                context.paint()  # paint the background color
 
             for i_idx, i in enumerate(self.args.group_orders_list):
                 color_tuple = self.args.palette[i]
