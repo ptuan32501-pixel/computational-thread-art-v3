@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Generator, Literal, Optional, Tuple
+from typing import Generator, Literal
 
 import einops
 import numpy as np
@@ -72,6 +72,16 @@ class ThreadArtColorParams:
     # ^ if more than 1.0 then we take slightly larger jumps over pixels when drawing lines (t_pixels uses less memory)
     debug_through_pixels_dict: bool = False
     # ^ if True, we leave all the debug print statements e.g. tensor sizes, if false then we only print post init time
+    mode: Literal["color", "monochrome"] = "color"
+    # ^ For black and white images (hacky)
+    critical_distance: int = 14
+    # ^ So we don't start and end lines too close to each other
+    width_to_gap_ratio: float = 1.0
+    # ^ Ratio of hook width to distance between hooks, so I can see what physical piece looks like
+
+    @classmethod
+    def from_dict(cls, args_dict: dict) -> "ThreadArtColorParams":
+        return cls(**args_dict)
 
     def __post_init__(self):
         t0 = time.time()
@@ -91,9 +101,9 @@ class ThreadArtColorParams:
             self.y,
             self.n_nodes,
             shape=self.shape,
-            critical_distance=14,
+            critical_distance=self.critical_distance,
             only_return_d_coords=False,
-            width_to_gap_ratio=1,
+            width_to_gap_ratio=self.width_to_gap_ratio,
             step_size=self.step_size,
             debug=self.debug_through_pixels_dict,
         )
@@ -141,7 +151,6 @@ class Img:
     ) -> None:
         # TODO - maybe reuse these parameters
         self.dithering_params = ["clamp"]
-        self.wneg = None
         self.pixels_per_batch = 32
         self.num_overlap_rows = 6
 
@@ -197,14 +206,20 @@ class Img:
             #         if not filter_fn(color_name):
             #             self.w_restriction[..., j][mask_to_apply_filter] = 1.0
 
-        # ! Dither the images
-        # This does dithering by batch, i.e. it arranges the 3D image into 4D and vectorizes the operation
-        self.image_dithered, t_FS = self.FS_dither(self.pixels_per_batch, self.num_overlap_rows)
+        if self.args.mode == "color":
+            # ! Dither the images
+            # This does dithering by batch, i.e. it arranges the 3D image into 4D and vectorizes the operation
+            self.image_dithered, t_FS = self.FS_dither(self.pixels_per_batch, self.num_overlap_rows)
 
-        # ! Create the mono images dict
-        # Note, most colors will come from dithering `self.imageRGB`, but we also support some mono images coming from
-        # images specifically provided for this purpose: `self.imagesMono`
-        self.generate_mono_images_dict(self.args.other_colors_weighting)
+            # ! Create the mono images dict
+            # Note, most colors will come from dithering `self.imageRGB`, but we also support some mono images coming from
+            # images specifically provided for this purpose: `self.imagesMono`
+            self.generate_mono_images_dict(self.args.other_colors_weighting)
+
+        else:
+            # Basic operation for monochrome - only black and white
+            self.generate_mono_images_dict()
+            t_FS = 0.0
 
         print(f"Other init operations complete in {time.time() - t0 - t_FS:.2f} seconds")
 
@@ -213,7 +228,7 @@ class Img:
         self,
         pixels_per_batch: int | None,
         num_overlap_rows: int,
-    ) -> Tuple[Tensor, float]:
+    ) -> tuple[Float[Tensor, "y x 3"], float]:
         t_FS = time.time()
 
         image_dithered: Float[Tensor, "y x 3"] = self.imageRGB.clone().float()
@@ -287,7 +302,7 @@ class Img:
         self,
         image_dithered: Float[Tensor, "y x batch 3"],
         image_palette_restriction: Float[Tensor, "y x palette batch"] | None,
-    ) -> Tuple[Tensor, float]:
+    ) -> tuple[Tensor, float]:
         # Define the constants we'll multiply with when "shifting the errors" in dithering
         AB = t.tensor([3, 5]) / 16
         ABC = t.tensor([3, 5, 1]) / 16
@@ -372,12 +387,13 @@ class Img:
 
     # Displays image output
     def display_output(self, height: int, width: int):
-        image_dithered = (
-            mask_ellipse(self.image_dithered.float() / 255, 0.5)
-            if self.args.shape == "Ellipse"
-            else self.image_dithered.float()
-        )
-        px.imshow(image_dithered, height=height, width=width, template="plotly_dark").show()
+        if self.args.mode == "color":
+            image_dithered = (
+                mask_ellipse(self.image_dithered.float() / 255, 0.5)
+                if self.args.shape == "Ellipse"
+                else self.image_dithered.float()
+            )
+            px.imshow(image_dithered, height=height, width=width, template="plotly_dark").show()
         mono_images = [
             (mask_ellipse(x, 0.5) if self.args.shape == "Ellipse" else x) for x in self.mono_images_dict.values()
         ]
@@ -396,48 +412,59 @@ class Img:
         fig.show()
 
     # Takes FS output and returns a dictionary of monochromatic images (called in __init__)
-    def generate_mono_images_dict(self, other_colors_weighting: list[list[float]]):
-        # Note - this function used to use the `t_pixels` tensor to only get the pixels which a line runs through,
-        # but since this is just for a histogram, doing that is totally not relevant (and also doesn't change things
-        # much as long as your image is high-res).
+    def generate_mono_images_dict(self, other_colors_weighting: list[list[float]] | None = None):
+        if other_colors_weighting is None:
+            # Assumed monochrome mode
 
-        d_histogram = dict()  # histogram of frequency of colors (cropped to a circle if necessary)
-        d_mono_images_pre = dict()  # mono-color images, before they've been processed
-        d_mono_images_post = dict()  # mono-color images, after processing (i.e. adding weight to nearby colors)
+            imageBW_01 = self.imageBW.float() / 255.0
 
-        # For each color, get its boolean map in the dithered image, and calculate the histogram
-        for color_tuple in self.args.palette:
-            # Case 1: color doesn't have its own dedicated monoImage
-            # if color_name not in self.imagesMono:
-            mono_image = (get_img_hash(self.image_dithered) == get_color_hash(t.tensor(color_tuple))).int()
-            d_mono_images_pre[color_tuple] = mono_image
-            d_histogram[color_tuple] = mono_image.sum() / mono_image.numel()
-            # else:
-            #     mono_image = self.imagesMono[
-            #         color_name
-            #     ]  # it's already a 2D monochrome image, with black = important areas
-            #     d_mono_images_pre[color_name] = mono_image
-            #     d_histogram[color_name] = mono_image.sum() / mono_image.numel()
+            self.color_histogram = {
+                (0, 0, 0): 1 - imageBW_01.mean(),
+                (255, 255, 255): imageBW_01.mean(),
+            }
+            self.mono_images_dict = {
+                (0, 0, 0): 1 - imageBW_01,
+                (255, 255, 255): imageBW_01,
+            }
 
-        # Renormalize d_histogram (because if we used mono images for specific colors, then they won't sum to 1)
-        nTotal = sum(d_histogram.values())
-        d_histogram = {color_tuple: n / nTotal for color_tuple, n in d_histogram.items()}
-
-        # Use `other_colors_weighting`, converting the mono images into linear multiples of themselves
-        if other_colors_weighting:
-            assert len(other_colors_weighting) == len(self.args.palette), (
-                "Should either give full list for other_colors_weighting (with optional empty elems) or empty list"
-            )
-            for i, base_color in enumerate(self.args.palette):
-                d_mono_images_post[base_color] = sum(
-                    d_mono_images_pre[adj_color].clone().float() * adj_coeff
-                    for adj_color, adj_coeff in zip(self.args.palette, other_colors_weighting[i])
-                )
         else:
-            d_mono_images_post = d_mono_images_pre
+            d_histogram = dict()  # histogram of frequency of colors (cropped to a circle if necessary)
+            d_mono_images_pre = dict()  # mono-color images, before they've been processed
+            d_mono_images_post = dict()  # mono-color images, after processing (i.e. adding weight to nearby colors)
 
-        self.color_histogram = d_histogram
-        self.mono_images_dict = d_mono_images_post
+            # For each color, get its boolean map in the dithered image, and calculate the histogram
+            for color_tuple in self.args.palette:
+                # Case 1: color doesn't have its own dedicated monoImage
+                # if color_name not in self.imagesMono:
+                mono_image = (get_img_hash(self.image_dithered) == get_color_hash(t.tensor(color_tuple))).int()
+                d_mono_images_pre[color_tuple] = mono_image
+                d_histogram[color_tuple] = mono_image.sum() / mono_image.numel()
+                # else:
+                #     mono_image = self.imagesMono[
+                #         color_name
+                #     ]  # it's already a 2D monochrome image, with black = important areas
+                #     d_mono_images_pre[color_name] = mono_image
+                #     d_histogram[color_name] = mono_image.sum() / mono_image.numel()
+
+            # Renormalize d_histogram (because if we used mono images for specific colors, then they won't sum to 1)
+            nTotal = sum(d_histogram.values())
+            d_histogram = {color_tuple: n / nTotal for color_tuple, n in d_histogram.items()}
+
+            # Use `other_colors_weighting`, converting the mono images into linear multiples of themselves
+            if other_colors_weighting:
+                assert len(other_colors_weighting) == len(self.args.palette), (
+                    "Should either give full list for other_colors_weighting (with optional empty elems) or empty list"
+                )
+                for i, base_color in enumerate(self.args.palette):
+                    d_mono_images_post[base_color] = sum(
+                        d_mono_images_pre[adj_color].clone().float() * adj_coeff
+                        for adj_color, adj_coeff in zip(self.args.palette, other_colors_weighting[i])
+                    )
+            else:
+                d_mono_images_post = d_mono_images_pre
+
+            self.color_histogram = d_histogram
+            self.mono_images_dict = d_mono_images_post
 
     # Prints a suggested number of lines, in accordance with histogram frequencies (used in Juypter Notebook)
     def decompose_image(self, n_lines_total=10000):
@@ -542,8 +569,8 @@ class Img:
         x_output: int | None = None,
         rand_perm: float = 0.0025,
         fraction: tuple[float, float] | dict[str, tuple[float, float]] | None = None,
-        background_color: Tuple[int, int, int] | None = (0, 0, 0),
-        inner_background_color: Tuple[int, int, int] | None = None,
+        background_color: tuple[int, int, int] | None = (0, 0, 0),
+        inner_background_color: tuple[int, int, int] | None = None,
         show_individual_colors: bool = False,
         line_width_multiplier: float = 1.0,
         png: bool = True,
@@ -614,16 +641,19 @@ class Img:
         # Get x and y values, and also the coords dict
         if x_output is None:
             x_output = self.x
-        y_output = int(self.y * x_output / self.x)
-        d_coords = build_through_pixels_dict(
-            x_output,
-            y_output,
-            self.args.n_nodes,
-            shape=self.args.shape,
-            critical_distance=14,
-            only_return_d_coords=True,
-            width_to_gap_ratio=1,
-        )
+            y_output = self.y
+            d_coords = self.args.d_coords
+        else:
+            y_output = int(self.y * x_output / self.x)
+            d_coords = build_through_pixels_dict(
+                x_output,
+                y_output,
+                self.args.n_nodes,
+                shape=self.args.shape,
+                critical_distance=14,
+                only_return_d_coords=True,
+                width_to_gap_ratio=1,
+            )
         YX = t.tensor([y_output, x_output])
 
         # Deal with case where img_name had a fwd slash in it
@@ -641,8 +671,8 @@ class Img:
             context.set_source_rgba(*bg_color)
             context.paint()
 
-            # If inner background color is specified, set it inside the circle
-            if inner_background_color is not None:
+            # If inner background color is specified (and we're using circles), set it inside the circle
+            if self.args.shape == "Ellipse" and inner_background_color is not None:
                 inner_bg_color = [c / 255 for c in inner_background_color]
                 context.set_source_rgba(*inner_bg_color)  # set bg color
                 context.arc(0.5, 0.5, 0.495, 0, 2 * math.pi)  # draw circle as 360-deg arc
@@ -724,6 +754,100 @@ class Img:
             if not verbose:
                 print(f"Painted canvas in {time.time() - t0:.2f} seconds")
 
+    def generate_thread_art_instructions_html(
+        self,
+        line_dict: dict[tuple[int, int, int], list[tuple[int, int]]],
+        dark_mode: bool = True,
+        next_arrow_size: float = 0.5,
+    ) -> str:
+        # Calculate total number of lines
+        total_lines = sum(len(lines) for lines in line_dict.values())
+
+        # Process the lines in the order specified by group_orders
+        ordered_lines = []
+        color_indices = []  # Track which color each line belongs to
+        slice_indices = []  # Track which slice each line belongs to
+
+        for i_idx, i in enumerate(self.args.group_orders_list):
+            color_tuple = list(line_dict.keys())[i]
+            lines = line_dict[color_tuple]
+
+            # Count occurrences of this group in total and so far
+            total_occurrences = self.args.group_orders_list.count(i)
+            current_occurrence = self.args.group_orders_list[: i_idx + 1].count(i)
+
+            # Calculate lines per occurrence, ensuring all lines are used
+            base_lines_per_group = len(lines) // total_occurrences
+            remainder = len(lines) % total_occurrences
+
+            # Calculate start and end indices for this occurrence
+            start_idx = (base_lines_per_group * (current_occurrence - 1)) + min(current_occurrence - 1, remainder)
+            end_idx = (base_lines_per_group * current_occurrence) + min(current_occurrence, remainder)
+
+            lines_to_draw = lines[::-1][start_idx:end_idx]  # Keep the reversal as requested
+
+            for line in lines_to_draw:
+                ordered_lines.append(list(line))
+                color_indices.append(i)
+                slice_indices.append(i_idx)
+
+        # Calculate information needed for the fractional displays
+        color_line_counts = {}  # Total lines per color
+        for i, color_tuple in enumerate(line_dict.keys()):
+            color_line_counts[i] = len(line_dict[color_tuple])
+
+        # Calculate lines per slice
+        slice_line_counts = {}
+        for i_idx, i in enumerate(self.args.group_orders_list):
+            # Same calculation as above to determine how many lines are in this slice
+            total_occurrences = self.args.group_orders_list.count(i)
+            current_occurrence = self.args.group_orders_list[: i_idx + 1].count(i)
+
+            base_lines_per_group = len(line_dict[list(line_dict.keys())[i]]) // total_occurrences
+            remainder = len(line_dict[list(line_dict.keys())[i]]) % total_occurrences
+
+            lines_in_slice = base_lines_per_group + (1 if current_occurrence <= remainder else 0)
+            slice_line_counts[i_idx] = lines_in_slice
+
+        # Convert colors to strings for display
+        color_strings = [str(list(line_dict.keys())[i]) for i in range(len(line_dict))]
+
+        # Set colors based on dark_mode
+        bg_color = "#000000" if dark_mode else "#FFFFFF"
+        even_arrow_color = "#FFFFFF" if dark_mode else "#000000"
+        odd_arrow_color = "#FF0000"  # Red for both modes
+        text_color = "#FFFFFF" if dark_mode else "#000000"
+
+        style_replace_dict = {
+            "TEXT_COLOR": text_color,
+            "BG_COLOR": bg_color,
+        }
+
+        return f"""
+{load_template("instructions-index.html")}
+
+<style>
+{load_template("instructions-style.css", style_replace_dict)}
+</style>
+
+<script>
+const keepColorName = true;
+const n_nodes = {self.args.n_nodes};
+const totalLines = {total_lines};
+const orderedLines = {ordered_lines};
+const colorIndices = {color_indices};
+const sliceIndices = {slice_indices};
+const colorStrings = {color_strings};
+const colorLineCounts = {color_line_counts};
+const sliceLineCounts = {slice_line_counts};
+const evenArrowColor = "{even_arrow_color}";
+const oddArrowColor = "{odd_arrow_color}";
+const nextArrowSize = {next_arrow_size};
+
+{load_template("instructions-init.js")}
+</script>
+"""
+
     def generate_thread_art_html(
         self,
         line_dict: dict[tuple[int, int], list[tuple[int, int]]],
@@ -782,10 +906,13 @@ console.log(data);
 """
 
 
-def load_template(filename: str) -> str:
+def load_template(filename: str, replace_dict: dict = {}) -> str:
     path = Path(__file__).parent / "templates" / filename
     assert path.exists()
-    return path.read_text()
+    content = path.read_text()
+    for key, value in replace_dict.items():
+        content = content.replace(key, str(value))
+    return content
 
 
 # Blurs the monochromatic images (used in the function below)
@@ -845,7 +972,7 @@ def blur_image(img: Tensor, rad: int, mode="linear", **kwargs) -> Tensor:
 def choose_and_subtract_best_line(
     m_image: Tensor,
     i: int,
-    w: Optional[Tensor],
+    w: Tensor | None,
     n_random_lines: int | Literal["all"],
     darkness: float,
     d_joined: dict[int, list[int]],

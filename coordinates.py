@@ -347,6 +347,13 @@ def build_through_pixels_dict(
 
         angles = np.linspace(0, 2 * np.pi, n_nodes + 1)[:-1]
 
+        # Offset the angles by the width to gap ratio
+        δ = (width_to_gap_ratio - 1) / (2 * (width_to_gap_ratio + 1))
+        angle_diff = angles[1] - angles[0]
+        angles[::2] += angle_diff * δ
+        angles[1::2] -= angle_diff * δ
+        angles = np.mod(angles, 2 * np.pi)
+
         x_coords = 1 + ((0.5 * x) - 2) * (1 + np.cos(angles))
         y_coords = 1 + ((0.5 * y) - 2) * (1 - np.sin(angles))
 
