@@ -1,3 +1,4 @@
+import itertools
 import math
 import os
 from collections import Counter
@@ -24,152 +25,193 @@ ARCS = {"clockwise": "G2", "anticlockwise": "G3"}
 
 
 def generate_thread_art_gcode(
-    line_list, n_nodes, diameter, feed_rate=500, acceleration=50, output_file="thread_art.gcode"
+    line_dict: dict[tuple[int, int, int], list[tuple[int, int]]],
+    group_orders: str,
+    starting_posn: tuple[float, float],
+    debug_nodes: list[int],
+    n_nodes: int,
+    feed_rate: int | None = None,
+    arc_feed_rate: int | None = None,
+    inner_radius: int = 10,
+    outer_radius: int = 5,
+    test_distance: int = 0,
+) -> list[list[str]]:
+    """
+    Generates full thread art GCode, by breaking down each line dict color according to group orders.
+
+    Args:
+        line_dict: Dictionary with color names as keys and lists of lines as values
+        group_orders: String representing the order of groups for each color
+        starting_posn: Starting position of the arm (x, y) in mm
+        debug_nodes: List of noes we'll visit before starting, in order to debug
+        n_nodes: Total number of nodes (hook sides) around the circular frame
+        feed_rate: Movement speed in mm/min
+        inner_radius: How far inside the hook do we go before going outside and looping around it
+        outer_radius: How far outside the hook do we go before looping around it (only applies if lines not arcs)
+        test_distance: If supplied, we subtract this many mm from radius (so we can test going close to edge, not on it)
+    """
+    # # Gets the estimated center and radius of the circle, from the `coords` supplied
+    # coords_normalized = {index / n_nodes: coord for index, coord in coords.items()}
+    # radius, center, starting_angle = estimate_circle_from_coords(coords_normalized)
+    # radius -= debug_radius  # Take off the debug radius, if any
+
+    # Get the radius & starting angle (which is the angle of node 1.5, i.e. a gap between nodes)
+    x, y = starting_posn
+    starting_angle = math.atan2(y, x)
+    radius = math.sqrt(x**2 + y**2) - test_distance
+
+    colors = list(line_dict.keys())
+    group_orders_list = [int(i) - 1 for i in group_orders.split(",")]
+
+    gcode = []
+
+    # Get the first lines, for debugging
+    debug_lines = _generate_thread_art_gcode_single_line_group(
+        line_list=[(i, j + (1 if j % 2 == 0 else -1)) for i, j in zip(debug_nodes, debug_nodes[1:])],
+        n_nodes=n_nodes,
+        radius=radius,
+        starting_angle=starting_angle,
+        feed_rate=feed_rate,
+        arc_feed_rate=arc_feed_rate,
+        inner_radius=inner_radius,
+        outer_radius=outer_radius,
+        use_origin=True,
+    )
+    gcode.append(debug_lines)
+
+    for i_idx, i in enumerate(group_orders_list):
+        lines = line_dict[colors[i]]
+        lines = [line[::-1] for line in lines[::-1]]  # Reverse the order of the lines, as well as their directions
+
+        # Count occurrences of this group in total and so far
+        total_occurrences = group_orders_list.count(i)
+        current_occurrence = group_orders_list[: i_idx + 1].count(i)
+
+        # Calculate lines per occurrence, ensuring all lines are used
+        base_lines_per_group = len(lines) // total_occurrences
+        remainder = len(lines) % total_occurrences
+
+        # Calculate start and end indices for this occurrence
+        start_idx = (base_lines_per_group * (current_occurrence - 1)) + min(current_occurrence - 1, remainder)
+        end_idx = (base_lines_per_group * current_occurrence) + min(current_occurrence, remainder)
+        # print(colors[i], start_idx, end_idx)
+
+        # Get the lines for this occurrence
+        lines = _generate_thread_art_gcode_single_line_group(
+            line_list=lines[start_idx:end_idx],
+            n_nodes=n_nodes,
+            radius=radius,
+            starting_angle=starting_angle,
+            feed_rate=feed_rate,
+            arc_feed_rate=arc_feed_rate,
+            inner_radius=inner_radius,
+            outer_radius=outer_radius,
+        )
+        gcode.append(lines)
+
+    return gcode
+
+
+def _generate_thread_art_gcode_single_line_group(
+    line_list: list[tuple[int, int]],
+    n_nodes: int,
+    radius: float,
+    starting_angle: float,
+    feed_rate: int | None,
+    arc_feed_rate: int | None,
+    inner_radius: int = 10,
+    outer_radius: int = 5,
+    use_origin: bool = False,
 ) -> list[str]:
     """
     Generate G-code for thread art connecting points around a circular frame.
 
+    It works by going to points exactly on the circumference of the circle with radius `radius` (these will be half way
+    in between two hooks) and then loop in a small 180 degree arc around them. The line is designed to have no sharp
+    turns, so the path between two hooks forms a smooth arc with the short path looping around the hooks.
+
     Args:
         line_list: List of tuples, each tuple (a, b) represents a thread line connecting hooks a and b
         n_nodes: Total number of nodes (hook sides) around the circular frame
-        diameter: Physical diameter of the circular frame in mm
-        feed_rate: Movement speed in mm/min
-        acceleration: Acceleration rate (lower means smoother transitions)
-        output_file: Name of the output G-code file
+        radius: Physical diameter of the circular frame in mm
+        feed_rate: Movement speed in mm/min, for the fast lines
+        arc_feed_rate: Movement speed in mm/min, for the slower arcs around hooks
+        inner_radius: How far inside the hook we move before going outside and looping around it
+        use_origin: If True, we visit origin between each move (for debugging)
     """
-    # Calculate spacing between hooks and radius
-    # hook_width = math.pi * diameter / n_nodes
-    radius = diameter / 2
+    feed_rate_lines = f"F{feed_rate:.0f}" if feed_rate else ""
+    feed_rate_arcs = f"F{arc_feed_rate:.0f}" if arc_feed_rate else feed_rate_lines
 
-    # Calculate positions of all hook sides around the circle
-    hook_positions = []
-    for i in range(n_nodes):
-        # Calculate angle in radians (starting from the right, going counterclockwise)
-        angle = 2 * math.pi * i / n_nodes
-        x = radius * math.cos(angle)
-        y = radius * math.sin(angle)
-        hook_positions.append((x, y, angle))
+    # Get unit radius positions of all nodes (i.e. the edges of hooks)
+    hook_angles = (np.arange(0, n_nodes) - 1.5) * 2 * math.pi / n_nodes + starting_angle
 
     # Initialize G-code with setup commands
     gcode = []
-
-    # Setup header
     gcode.append("; Thread Art G-code")
-    gcode.append("; Generated for {} nodes on a {}mm diameter circle".format(n_nodes, diameter))
+    gcode.append("; Generated for {} nodes on a {:.2f}mm radius circle".format(n_nodes, radius))
     gcode.append("; Copy to https://ncviewer.com/")
-    gcode.append("G21 ; Set units to millimeters")
-    gcode.append("G90 ; Absolute positioning")
-    gcode.append("G92 X0 Y0 Z0 ; Set current position as origin")
-    gcode.append(f"M204 S{acceleration} ; Set acceleration")
-    gcode.append("G0 Z5 ; Lift to safe height")
+    gcode.append(f"G1 X0 Y0 {feed_rate_lines} ; Start at center")
 
-    # Process each line in the list
-    # First, move to the beginning point of the first line
-    first_hook = line_list[0][0]
-    first_x, first_y, first_angle = hook_positions[first_hook]
+    for i, (hA_1, hB_0) in enumerate(line_list):
+        hA_0 = hA_1 + 1 if hA_1 % 2 == 0 else hA_1 - 1
+        hB_1 = hB_0 + 1 if hB_0 % 2 == 0 else hB_0 - 1
 
-    # Move to the starting position
-    gcode.append(f"G0 X{first_x:.3f} Y{first_y:.3f} ; Move to starting position")
-    gcode.append("G0 Z0 ; Lower to working height")
+        # Notation:
+        #   - hA and hB are the start and end hooks
+        #   - _0 and _1 are our entry and exit sides for those hooks
+        # Assume we're currently at hA_1, having just looped around hA, then the steps are:
+        #   (1) Move inside circle, raise pen
+        #   (2) Move to next hook (i.e. hB_0), then lower pen
+        #   (3) Move outside circle (to perimeter)
+        #   (4) Loop around, to outside of hB_1#
 
-    # Process each line
-    for h1, h2 in line_list:
-        # Get positions of the current hooks
-        h1_x, h1_y, h1_angle = hook_positions[h1]
-        h2_x, h2_y, h2_angle = hook_positions[h2]
+        using_arcs = outer_radius == 0
 
-        # ! 1. Calculate the arc around the current hook, i.e. ending up at h1
-        # Determine adjacent hook (where we're starting from) to get arc midpoint
-        h0 = h1 + 1 if h1 % 2 == 0 else h1 - 1
-        h0_x, h0_y, h0_angle = hook_positions[h0]
+        # (1)
+        r = radius - inner_radius
+        angle = hook_angles[hA_1] + 0.5 * (hook_angles[hA_1] - hook_angles[hA_0])
+        x, y = r * math.cos(angle), r * math.sin(angle)
+        gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_lines if (i == 0 and use_origin) else feed_rate_arcs} ; move in")
+        gcode.append("M3S250 ; raise")
 
-        mid_angle = (h1_angle + h0_angle) / 2
-        arc_center_x = radius * math.cos(mid_angle)
-        arc_center_y = radius * math.sin(mid_angle)
+        # Optional debugging: go to the center before moving to the next hook
+        if use_origin:
+            gcode.append(f"G1 X0 Y0 {feed_rate_lines} ; move to origin")
 
-        # Calculate arc end point (180 degrees from start point, around the arc center)
-        arc_h1_x = arc_center_x + (h1_x - h0_x)
-        arc_h1_y = arc_center_y + (h1_y - h0_y)
+        # (2)
+        angle = hook_angles[hB_0] + 0.5 * (hook_angles[hB_0] - hook_angles[hB_1])
+        x, y = r * math.cos(angle), r * math.sin(angle)
+        gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_lines} ; move to next hook")
+        gcode.append("M3S0 ; lower")
 
-        # Determine if this is a clockwise (G2) or counterclockwise (G3) arc
-        arc_command = ARCS["anticlockwise" if h0 % 2 == 0 else "clockwise"]
+        # (3)
+        r = radius
+        x, y = r * math.cos(angle), r * math.sin(angle)
+        gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_lines} ; move to perimeter")
 
-        # Calculate I and J values for the arc
-        i_val = arc_center_x - h0_x
-        j_val = arc_center_y - h0_y
+        # (4)
+        if using_arcs:
+            angle_end = hook_angles[hB_1] + 0.5 * (hook_angles[hB_1] - hook_angles[hB_0])
+            x_end, y_end = r * math.cos(angle_end), r * math.sin(angle_end)
+            angle_mid = 0.5 * (angle + angle_end)
+            x_mid, y_mid = r * math.cos(angle_mid), r * math.sin(angle_mid)
+            i, j = x_mid - x, y_mid - y
+            instruction = "G03" if hB_0 % 2 == 0 else "G02"
+            gcode.append(f"{instruction} X{x_end:.3f} Y{y_end:.3f} I{i:.3f} J{j:.3f} {feed_rate_arcs} ; loop around")
+        else:
+            r = radius + outer_radius
+            x, y = r * math.cos(angle), r * math.sin(angle)
+            gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_arcs} ; move to outside circle")
+            angle = hook_angles[hB_1] + 0.5 * (hook_angles[hB_1] - hook_angles[hB_0])
+            x, y = r * math.cos(angle), r * math.sin(angle)
+            gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_arcs} ; loop around")
+            r = radius
+            x, y = r * math.cos(angle), r * math.sin(angle)
+            gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_arcs} ; move to inside circle")
 
-        # Create the arc command to go around the hook
-        gcode.append(
-            f"{arc_command} X{arc_h1_x:.3f} Y{arc_h1_y:.3f} I{i_val:.3f} J{j_val:.3f} F{feed_rate / 2} ; Arc around hook {h1}"
-        )
-
-        # ! 2. Now create the arc from the end of the current hook's arc to the next hook
-        # Calculate the center of the arc between hooks
-        # This is where the two tangent lines from each hook would meet
-
-        # Vector from center to end of first hook arc
-        v1_x = arc_h1_x
-        v1_y = arc_h1_y
-
-        # Vector from center to next hook
-        v2_x = h2_x
-        v2_y = h2_y
-
-        # Normalize these vectors
-        v1_mag = math.sqrt(v1_x**2 + v1_y**2)
-        v2_mag = math.sqrt(v2_x**2 + v2_y**2)
-
-        v1_x /= v1_mag
-        v1_y /= v1_mag
-        v2_x /= v2_mag
-        v2_y /= v2_mag
-
-        # Calculate the angle between these vectors
-        dot_product = v1_x * v2_x + v1_y * v2_y
-        angle_between = math.acos(max(-1.0, min(1.0, dot_product)))
-
-        # The direction vector for the arc center is the bisector of these vectors
-        bisector_x = v1_x + v2_x
-        bisector_y = v1_y + v2_y
-
-        # Normalize the bisector
-        bisector_mag = math.sqrt(bisector_x**2 + bisector_y**2)
-        if bisector_mag > 0.001:  # Prevent division by zero
-            bisector_x /= bisector_mag
-            bisector_y /= bisector_mag
-
-        # Calculate the distance to the arc center
-        # This ensures the arc is tangent to the radial directions at both hooks
-        distance_to_center = radius / math.cos(angle_between / 2) if angle_between < math.pi else 0
-
-        # Set the arc center
-        connecting_arc_center_x = distance_to_center * bisector_x
-        connecting_arc_center_y = distance_to_center * bisector_y
-
-        # Calculate I and J for the connecting arc (relative to current position)
-        connecting_i = connecting_arc_center_x - arc_h1_x
-        connecting_j = connecting_arc_center_y - arc_h1_y
-
-        # Determine if this is a clockwise or counterclockwise arc
-        # This depends on the orientation of the hooks and the shortest path
-        # We compute the cross product of v1 × v2 to determine direction
-        cross_product = v1_x * v2_y - v1_y * v2_x
-        connecting_arc_command = ARCS["clockwise" if cross_product > 0 else "anticlockwise"]
-
-        # Create the connecting arc command
-        gcode.append(
-            f"{connecting_arc_command} X{h2_x:.3f} Y{h2_y:.3f} I{connecting_i:.3f} J{connecting_j:.3f} F{feed_rate} ; Arc to hook {h2}"
-        )
-
-    # Finish G-code
-    gcode.append("G0 Z10 ; Raise to safe height")
-    gcode.append("M84 ; Disable motors")
-    gcode.append("; End of program")
-
-    # Write to file
-    with open(output_file, "w") as f:
-        for line in gcode:
-            f.write(line + "\n")
+    # End at the origin, after raising
+    gcode.append("M3S250 ; raise")
+    gcode.append(f"G1 X0 Y0 {feed_rate_lines} ; Return to origin to finish")
 
     return gcode
 
