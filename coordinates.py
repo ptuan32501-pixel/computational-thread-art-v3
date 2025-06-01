@@ -183,8 +183,6 @@ def build_through_pixels_dict(
     if shape == "Rectangle" and isinstance(n_nodes, int):
         assert (n_nodes % 4) == 0, f"n_nodes = {n_nodes} needs to be divisible by 4, or else there will be an error"
 
-    # assert critical_angle_for_hook_sides is None, "It fucking sucks but I guess we need to have perfect god damn symmetry in d_joined otherwise we get ugly pronounced radial patterns"
-
     critical_distance = int(critical_angle * n_nodes)
     if critical_angle_for_hook_sides is None:
         critical_distance_for_hook_sides = critical_distance
