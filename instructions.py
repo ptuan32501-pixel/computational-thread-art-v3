@@ -160,6 +160,7 @@ def _generate_thread_art_gcode_single_line_group(
     gcode.append("; Thread Art G-code")
     gcode.append("; Generated for {} nodes on a {:.2f}mm radius circle".format(n_nodes, radius))
     gcode.append("; Copy to https://ncviewer.com/")
+    gcode.append("M3S250 ; raise")
     gcode.append(f"G1 X0 Y0 {feed_rate_lines} ; Start at center")
 
     for i, (hA_1, hB_0) in enumerate(line_list):
@@ -167,8 +168,8 @@ def _generate_thread_art_gcode_single_line_group(
         hB_1 = hB_0 + 1 if hB_0 % 2 == 0 else hB_0 - 1
 
         if not flip_hook_parity:
-            if i == 0:
-                gcode.append("M3S0 ; lower")
+            if i == 1:
+                gcode.append("M3S0 ; lower")  # lower pen after we go from origin -> starting position
             angle = hook_angles[hA_1]
             x, y = radius * math.cos(angle), radius * math.sin(angle)
             gcode.append(f"G1 X{x:.3f} Y{y:.3f} {feed_rate_lines} ; next point")
