@@ -5,6 +5,7 @@ const yPermSmall = randPerm * smallHeight;
 
 const margin = 0;
 const frameDuration = 25;
+const onlyUseBlack = true; // the decomposition only uses black on white background, not actual thread color on black/white
 
 // Setup full-color SVG and scales
 const fullSvg = d3.select("#full-canvas");
@@ -27,7 +28,7 @@ const colorsContainer = d3.select(".colors-container");
 // Generate individual color containers, and set up scales for them
 data.palette.forEach((colorRGB, i) => {
     const rgbValues = colorRGB.match(/\d+/g).map(Number);
-    const isVeryLightColor = rgbValues[0] + rgbValues[1] + rgbValues[2] >= 255 * 1.9;
+    const isVeryLightColor = rgbValues[0] + rgbValues[1] + rgbValues[2] >= 255 + 150; // Color of light orange
     const backgroundColor = isVeryLightColor ? "black" : "white";
 
     // Create a container for each color
@@ -46,7 +47,7 @@ data.palette.forEach((colorRGB, i) => {
         .attr("class", "canvas")
         .attr("width", smallWidth + "px")
         .attr("height", smallHeight + "px")
-        .style("background-color", backgroundColor);
+        .style("background-color", (onlyUseBlack ? "white" : backgroundColor));
 });
 
 // TODO - combine this code with some of the code above?
@@ -139,7 +140,7 @@ function createAllLineElements() {
             .attr("y1", d => scaleY(data.d_coords[d.coords[0]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
             .attr("x2", d => scaleX(data.d_coords[d.coords[1]][1]) + (Math.random() * 2 * xPermSmall - xPermSmall))
             .attr("y2", d => scaleY(data.d_coords[d.coords[1]][0]) + (Math.random() * 2 * yPermSmall - yPermSmall))
-            .attr("stroke", d => d.color)
+            .attr("stroke", d => onlyUseBlack ? "black" : d.color)
             .attr("stroke-width", lineWidth/2)
             .attr("visibility", "hidden") // Start with all lines hidden
             .attr("data-index", (d, i) => i); // Store index for easy access

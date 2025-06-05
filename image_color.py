@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from tkinter import NO
 from typing import Generator, Literal
 
 import einops
@@ -72,10 +73,11 @@ class ThreadArtColorParams:
     # ^ if True, we leave all the debug print statements e.g. tensor sizes, if false then we only print post init time
     mode: Literal["color", "monochrome"] = "color"
     # ^ For black and white images (hacky)
-    critical_angle: float = 0.02
-    critical_angle_for_hook_sides: float | None = None
-    critical_angle_penalty_power_decay: float | None = None
-    # ^ So we don't start and end lines too close to each other, and in a way the gantry finds hard to deal with
+    critical_fracs: tuple[float, float | None] = (0.02, None)
+    critical_frac_penalty_power_decay: float | None = None
+    # ^ So we don't start and end lines too close to each other, and in a way the gantry finds hard to deal with. The
+    # critical_fracs are a tuple: first element is strict (for the kind of lines which cross over themselves) and the
+    # second is lenient (for lines which don't self-cross, but are just sharp angles).
     width_to_gap_ratio: float = 1.0
     # ^ Ratio of hook width to distance between hooks, so I can see what physical piece looks like
     neg_penalty_multiplier: float = 0.0
@@ -106,13 +108,18 @@ class ThreadArtColorParams:
         else:
             self.shape = "Rectangle"
 
+        if self.critical_fracs[1] is None:
+            self.critical_fracs = (self.critical_fracs[0], self.critical_fracs[0])
+        assert self.critical_fracs[0] >= self.critical_fracs[1], (
+            "[0] should be bigger i.e. more restrictive (it's for the self-crossing lines), [1] should be smaller"
+        )
+
         self.d_coords, self.d_joined, self.d_sides, self.t_pixels = build_through_pixels_dict(
             self.x,
             self.y,
             self.n_nodes,
             shape=self.shape,
-            critical_angle=self.critical_angle,
-            critical_angle_for_hook_sides=self.critical_angle_for_hook_sides,
+            critical_fracs=self.critical_fracs,
             only_return_d_coords=False,
             width_to_gap_ratio=self.width_to_gap_ratio,
             step_size=self.step_size,
@@ -517,7 +524,6 @@ class Img:
             "Palette and lines per color don't match. Did you change the palette without re-updating params?"
         )
         t0 = time.time()
-        line_dict = dict()
 
         darkness = (
             self.args.darkness
@@ -546,21 +552,7 @@ class Img:
 
             for n in range(n_lines):  # range(n_lines): #, leave=False):
                 # Choose and add line
-                j = choose_and_subtract_best_line(
-                    m_image=m_image,
-                    i=i,
-                    w=self.w,
-                    n_random_lines=self.args.n_random_lines,
-                    darkness=darkness[color_idx],
-                    neg_penalty_multiplier=self.args.neg_penalty_multiplier,
-                    d_joined=self.args.d_joined,
-                    t_pixels=self.args.t_pixels,
-                    n_nodes=self.args.n_nodes,
-                    critical_angle=self.args.critical_angle,
-                    critical_angle_for_hook_sides=self.args.critical_angle_for_hook_sides,
-                    critical_angle_penalty_power_decay=self.args.critical_angle_penalty_power_decay,
-                )
-                # > line_dict[color_tuple].append((i, j))
+                j = self.choose_and_subtract_best_line(m_image=m_image, i=i, darkness=darkness[color_idx])
                 yield color_tuple, i, j
 
                 # Get the outgoing node
@@ -576,8 +568,107 @@ class Img:
         # If not verbose then we don't have a progress bar, just a single printout at the end
         print(f"Created canvas in {time.time() - t0:.2f} seconds")
 
-        # Return line dict
-        return line_dict
+    # Generates a bunch of random lines and chooses the best one
+    def choose_and_subtract_best_line(self, m_image: Tensor, i: int, darkness: float) -> int:
+        """
+        Generates a bunch of random lines (choosing them from `d_joined` which is a dictionary mapping node ints to all the
+        nodes they're connected to), picks the best line, subtracts its darkness from the image, and returns that line.
+        """
+        w = self.w
+        n_random_lines = self.args.n_random_lines
+        neg_penalty_multiplier = self.args.neg_penalty_multiplier
+        d_joined = self.args.d_joined
+        t_pixels = self.args.t_pixels
+        n_nodes = self.args.n_nodes
+        critical_fracs = self.args.critical_fracs
+        critical_frac_penalty_power_decay = self.args.critical_frac_penalty_power_decay
+
+        # Choose `j` random lines (or as many as possible)
+        if n_random_lines == "all" or n_random_lines > len(d_joined[i]):
+            j_choices = t.tensor(d_joined[i]).long()
+        else:
+            j_choices = t.from_numpy(
+                np.random.choice(d_joined[i], min(len(d_joined[i]), n_random_lines), replace=False)
+            ).long()
+        n_lines = j_choices.size(0)
+
+        # Get the pixels in the line, and rearrange it
+        coords_yx = t_pixels[pair_to_index(i, j_choices, n_nodes)].int()  # [n_lines 2 pixels]
+        is_zero = (coords_yx == 0).all(dim=1)  # [n_lines pixels]
+        coords_yx = einops.rearrange(coords_yx, "j yx pixels -> yx (j pixels)")  # [2 n_lines*pixels]
+
+        # Get the pixels in the line, and reshape it back to [n_lines, pixels]
+        pixel_values = m_image[coords_yx[0], coords_yx[1]]  # [n_lines*pixels]
+        pixel_values = einops.rearrange(pixel_values, "(j pixels) -> j pixels", j=n_lines).masked_fill(is_zero, 0)
+
+        # If any of our pixels are less than the darkness, and if neg_penalty_multiplier > 0, then we decrease their scores.
+        # The amount they're decreased by equals the negative values they'll have after subtracting the darkness, scaled by
+        # the neg_penalty_multiplier (e.g. if value is 0.2, darkness is 0.5, multiplier is 0.5, then we would decrease the
+        # score by 0.5 * (0.5 - 0.2) = 0.15 to reflect how we're de-incentivising pushing into negative values).
+        if neg_penalty_multiplier > 1e-6:
+            pixel_values -= neg_penalty_multiplier * (darkness - pixel_values).clamp(min=0.0)
+
+        # Optionally index & rearrange the weighting, in the same way as the pixels
+        lengths = (~is_zero).sum(-1).float()  # [n_lines]
+
+        if isinstance(w, Tensor):
+            w_pixel_values = w[coords_yx[0], coords_yx[1]]
+            w_pixel_values = einops.rearrange(w_pixel_values, "(j pixels) -> j pixels", j=n_lines).masked_fill(
+                is_zero, 0
+            )
+            w_sum = w_pixel_values.sum(dim=-1)  # [n_lines]
+            scores = (pixel_values * w_pixel_values).sum(-1) / w_sum  # [n_lines]
+        else:
+            scores = pixel_values.sum(-1) / lengths  # [n_lines]
+
+        # Add penalties to the scores for short lines. For example, if we aren't allowing clockwise lines of length 20,
+        # then we apply a probabilistic filter to lines of length between 20 and 20 * 2 = 40. This gives us a smooth
+        # gradient of lines from length 20 to 30, rather than a bunch of lines at 20 creating a radial effect. Note that
+        # we deal with clockwise and anticlockwise differently, because they have different thresholds.
+        if critical_frac_penalty_power_decay is not None:
+            assert critical_frac_penalty_power_decay > 0.0, "Power decay penalty must be in (0, 1] range"
+
+            if self.args.shape == "Rectangle":
+                raise NotImplementedError()
+                # n_nodes_on_adj_side = nodes_per_side_list[(i_side + 1) % 4]
+                # ac_corner = starting_idx_list[(i_side + 1) % 4]  # node at the corner anticlockwise to `i`
+                # c_corner = starting_idx_list[i_side]  # node at the corner clockwise to `i`
+                # assert c_corner <= i < (ac_corner or n4), f"Error: {c_corner=}, {i=}, {ac_corner=}"
+
+                # banned_anticlockwise = range(
+                #     ac_corner, ac_corner + min(n_nodes_on_adj_side, int((ac_corner - i) * critical_fracs[i % 2]))
+                # )
+                # banned_clockwise = range(
+                #     c_corner - min(n_nodes_on_adj_side, int((i - c_corner) * critical_fracs[1 - i % 2])), c_corner
+                # )
+                # d_joined[i] = sorted(set(d_joined[i]) - set(banned_anticlockwise) - set(banned_clockwise))
+            else:
+                critical_frac_ac, critical_frac_c = critical_fracs[::-1] if i % 2 == 1 else critical_fracs
+                diff_angles_ac = (j_choices - i) % n_nodes / n_nodes  # in range [critical_frac_ac, 1]
+                diff_angles_c = (i - j_choices) % n_nodes / n_nodes  # in range [critical_frac_c, 1]
+
+            assert diff_angles_ac.min() >= critical_frac_ac, f"Error: {diff_angles_ac.min()} < {critical_frac_ac}"
+            assert diff_angles_c.min() >= critical_frac_c, f"Error: {diff_angles_c.min()} < {critical_frac_c}"
+
+            # penalty_ac should be 1.0 at critical_frac_ac, and 0.0 at 2 * critical_frac_ac
+            penalty_ac = t.clamp((2 * critical_frac_ac - diff_angles_ac) / critical_frac_ac, min=0.0, max=1.0)
+            penalty_c = t.clamp((2 * critical_frac_c - diff_angles_c) / critical_frac_c, min=0.0, max=1.0)
+            assert not ((penalty_ac > 0) & (penalty_c > 0)).any(), (
+                "penalty_ac and penalty_c overlap on nonzero elements"
+            )
+            # Now we use these penalties to maybe replace the scores with neginf, removing those lines from consideration
+            penalty = (penalty_ac + penalty_c) ** critical_frac_penalty_power_decay
+            scores -= 1e4 * (t.rand(size=(n_lines,)) < penalty).float()
+
+        # Now choose the best remaining option!
+        best_j = j_choices[scores.argmax()].item()
+
+        coords_yx = t_pixels[pair_to_index(i, best_j, n_nodes)].int()  # [yx=2 pixels]
+        is_zero = coords_yx.sum(0) == 0  # [pixels]
+        coords_yx = coords_yx[:, ~is_zero]
+        m_image[coords_yx[0], coords_yx[1]] -= darkness
+
+        return best_j
 
     # Creates images / animations from the art
     def paint_canvas(
@@ -667,8 +758,7 @@ class Img:
                 y_output,
                 self.args.n_nodes,
                 shape=self.args.shape,
-                critical_angle=self.args.critical_angle,
-                critical_angle_for_hook_sides=self.args.critical_angle_for_hook_sides,
+                critical_fracs=self.args.critical_fracs,
                 only_return_d_coords=True,
                 width_to_gap_ratio=1,
             )
@@ -973,6 +1063,9 @@ def linear_blur_image(image: Tensor, rad: int, threeD=False):
 
 # Performs either linear blurring (image above) or Gaussian (used in `create_canvas` function, for image processing before creating output)
 def blur_image(img: Tensor, rad: int, mode="linear", **kwargs) -> Tensor:
+    if rad == 0:
+        return img
+
     if mode == "linear":
         return linear_blur_image(img, rad, **kwargs)
 
@@ -984,109 +1077,6 @@ def blur_image(img: Tensor, rad: int, mode="linear", **kwargs) -> Tensor:
 
     else:
         raise ValueError("Mode must be either 'linear' or 'gaussian'.")
-
-
-# Generates a bunch of random lines and chooses the best one
-def choose_and_subtract_best_line(
-    m_image: Tensor,
-    i: int,
-    w: Tensor | None,
-    n_random_lines: int | Literal["all"],
-    darkness: float,
-    neg_penalty_multiplier: float,
-    d_joined: dict[int, list[int]],
-    t_pixels: Float[Tensor, "n_lines 2 pixels"],
-    n_nodes: int,
-    critical_angle: float,
-    critical_angle_for_hook_sides: float,
-    critical_angle_penalty_power_decay: float | None,
-) -> int:
-    """
-    Generates a bunch of random lines (choosing them from `d_joined` which is a dictionary mapping node ints to all the
-    nodes they're connected to), picks the best line, subtracts its darkness from the image, and returns that line.
-    """
-
-    # Choose `j` random lines (or as many as possible)
-    if n_random_lines == "all" or n_random_lines > len(d_joined[i]):
-        j_choices = t.tensor(d_joined[i]).long()
-    else:
-        j_choices = t.from_numpy(
-            np.random.choice(d_joined[i], min(len(d_joined[i]), n_random_lines), replace=False)
-        ).long()
-    n_lines = j_choices.size(0)
-
-    # Get the pixels in the line, and rearrange it
-    coords_yx = t_pixels[pair_to_index(i, j_choices, n_nodes)].int()  # [n_lines 2 pixels]
-    is_zero = (coords_yx == 0).all(dim=1)  # [n_lines pixels]
-    coords_yx = einops.rearrange(coords_yx, "j yx pixels -> yx (j pixels)")  # [2 n_lines*pixels]
-
-    # Get the pixels in the line, and reshape it back to [n_lines, pixels]
-    pixel_values = m_image[coords_yx[0], coords_yx[1]]  # [n_lines*pixels]
-    pixel_values = einops.rearrange(pixel_values, "(j pixels) -> j pixels", j=n_lines).masked_fill(is_zero, 0)
-
-    # If any of our pixels are less than the darkness, and if neg_penalty_multiplier > 0, then we decrease their scores.
-    # The amount they're decreased by equals the negative values they'll have after subtracting the darkness, scaled by
-    # the neg_penalty_multiplier (e.g. if value is 0.2, darkness is 0.5, multiplier is 0.5, then we would decrease the
-    # score by 0.5 * (0.5 - 0.2) = 0.15 to reflect how we're de-incentivising pushing into negative values).
-    if neg_penalty_multiplier > 1e-6:
-        pixel_values -= neg_penalty_multiplier * (darkness - pixel_values).clamp(min=0.0)
-
-    # Optionally index & rearrange the weighting, in the same way as the pixels
-    lengths = (~is_zero).sum(-1).float()  # [n_lines]
-
-    if isinstance(w, Tensor):
-        w_pixel_values = w[coords_yx[0], coords_yx[1]]
-        w_pixel_values = einops.rearrange(w_pixel_values, "(j pixels) -> j pixels", j=n_lines).masked_fill(is_zero, 0)
-        w_sum = w_pixel_values.sum(dim=-1)  # [n_lines]
-        scores = (pixel_values * w_pixel_values).sum(-1) / w_sum  # [n_lines]
-    else:
-        scores = pixel_values.sum(-1) / lengths  # [n_lines]
-
-    # Add penalties to the scores for short lines. For example, if we aren't allowing clockwise lines of length 20,
-    # then we apply a probabilistic filter to lines of length between 20 and 20 * 2 = 40. This gives us a smooth
-    # gradient of lines from length 20 to 30, rather than a bunch of lines at 20 creating a radial effect. Note that
-    # we deal with clockwise and anticlockwise differently, because they have different thresholds.
-    if critical_angle_penalty_power_decay is not None:
-        assert critical_angle_penalty_power_decay > 0.0, "Power decay penalty must be in (0, 1] range"
-        critical_angle_ac, critical_angle_c = (
-            (critical_angle_for_hook_sides, critical_angle)
-            if i % 2 == 0
-            else (critical_angle, critical_angle_for_hook_sides)
-        )
-        diff_angles_ac = (j_choices - i) % n_nodes / n_nodes  # in range [critical_angle_ac, 1]
-        diff_angles_c = (i - j_choices) % n_nodes / n_nodes  # in range [critical_angle_c, 1]
-        assert diff_angles_ac.min() >= critical_angle_ac, f"Error: {diff_angles_ac.min()} < {critical_angle_ac}"
-        assert diff_angles_c.min() >= critical_angle_c, f"Error: {diff_angles_c.min()} < {critical_angle_c}"
-        # penalty_ac should be 1.0 at critical_angle_ac, and 0.0 at 2 * critical_angle_ac
-        penalty_ac = t.clamp((2 * critical_angle_ac - diff_angles_ac) / critical_angle_ac, min=0.0, max=1.0)
-        penalty_c = t.clamp((2 * critical_angle_c - diff_angles_c) / critical_angle_c, min=0.0, max=1.0)
-        assert not ((penalty_ac > 0) & (penalty_c > 0)).any(), "penalty_ac and penalty_c overlap on nonzero elements"
-        # Now we use these penalties to maybe replace the scores with neginf, removing those lines from consideration
-        penalty = (penalty_ac + penalty_c) ** critical_angle_penalty_power_decay
-        scores -= 1e4 * (t.rand(size=(n_lines,)) < penalty).float()
-        # if t.rand(size=(1,)).item() < 0.002:
-        #     print(penalty)
-
-    # Now choose the best remaining option!
-    best_j = j_choices[scores.argmax()].item()
-
-    # lengths_weighting = 0.2
-    # scores_sf = 300
-    # lengths_normalized = (lengths - lengths.mean()) / lengths.std()
-    # logits = scores_sf * (scores + lengths_normalized * lengths_weighting * scores.std())
-    # probs = logits.softmax(dim=-1)
-    # if t.rand(size=(1,)).item() < 0.002:
-    #     print(f"Max prob = {probs.max():.4f}")
-    #     print(f"Logits std dev = {logits.std():.4f}")
-    # sample = t.multinomial(probs, 1).item()
-    # best_j = j_choices[sample].item()
-
-    coords_yx = t_pixels[pair_to_index(i, best_j, n_nodes)].int()  # [yx=2 pixels]
-    is_zero = coords_yx.sum(0) == 0  # [pixels]
-    coords_yx = coords_yx[:, ~is_zero]
-    m_image[coords_yx[0], coords_yx[1]] -= darkness
-
-    return best_j
 
 
 # Permutes coordinates, to stop weird-looking line pattern effects (used by `paint_canvas` function)

@@ -5,6 +5,7 @@ Includes all funcs related to coordinate placement
 import gc
 import random
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch as t
 from IPython.display import clear_output
@@ -154,41 +155,37 @@ def build_through_pixels_dict(
     y,
     n_nodes,
     shape: str,
-    critical_angle: float = 0.05,
+    critical_fracs: tuple[float, float | None] = (0.02, None),
     only_return_d_coords: bool = False,
     width_to_gap_ratio: float = 1.0,
     step_size: float = 1.0,
-    critical_angle_for_hook_sides: float | None = None,
+    make_symmetric: bool = True,
     debug: bool = False,
-):
+) -> dict[int, Tensor] | tuple[dict[int, Tensor], dict[int, list[int]], dict[int, list[int]], Tensor]:
     """
     Args:
         x: width of the image
         y: height of the image
         n_nodes: number of nodes in the image
         shape: either "Rectangle" or "Ellipse", for rectangle / circular images
-        critical_angle: minimum distance between nodes that are considered "connected". Any nodes closer than this
-            aren't connected. This is useful for the gantry threading, because it finds these kinds of lines hard.
+        critical_fracs: minimum distance between nodes that are considered "connected". Any nodes closer than this
+            aren't connected. This is useful for the gantry threading, because it finds these kinds of lines hard. Note
+            this is a tuple, referring to the strict and lenient fractions respectively (the former is the strict one
+            because it refers to the kind of lines where the string crosses over itself; the latter is merely a sharp
+            angle).
         only_return_d_coords: if True, only returns the d_coords dictionary, not the pixel tensor. This is used when
             we're painting the canvas (the tensor is a more useful form when generating the image).
         width_to_gap_ratio: ratio of the width of the gap to the width of the line. This makes sure the image looks
             accurate to physical representation.
         step_size: size of the step between pixels. Making this larger than 1 results in a quicker algorithm, but can
             lose accuracy past a certain point.
-        critical_angle_for_hook_sides: If supplied, then we don't connect hooks together in ways that might cause the
-            gantry arm to cross over itself, for any nodes closer together than this.
+        make_symmetric: Experimental, makes connecting lines symmetric (I think the problem happens when we can draw
+            a line but then not go back the same way with a similar line).
         debug: if True, we don't clear the output at the end of the function. This is useful for debugging.
 
     """
     if shape == "Rectangle" and isinstance(n_nodes, int):
         assert (n_nodes % 4) == 0, f"n_nodes = {n_nodes} needs to be divisible by 4, or else there will be an error"
-
-    critical_distance = int(critical_angle * n_nodes)
-    if critical_angle_for_hook_sides is None:
-        critical_distance_for_hook_sides = critical_distance
-    else:
-        assert critical_angle_for_hook_sides >= critical_angle, "Needs to be bigger"
-        critical_distance_for_hook_sides = int(critical_angle_for_hook_sides * n_nodes)
 
     d_coords: dict[int, Float[Tensor, "2"]] = {}  # maps i -> coordinates of node i on perimeter
     d_joined: dict[int, list[int]] = {}  # maps node index i -> list of nodes connected to that one
@@ -266,10 +263,26 @@ def build_through_pixels_dict(
 
         # =============== get the joined pixels (i.e. the ones not on the same side) ===============
 
-        for i in d_sides:
+        for i, i_side in d_sides.items():
             d_joined[i] = [j for j in range(n4) if d_sides[i] != d_sides[j]]
-            if critical_angle_for_hook_sides is not None:
-                raise NotImplementedError("Requires fiddling with sides, implement this later.")
+            if critical_fracs is not None:
+                # If this side is clockwise, we can't sharply move anticlockwise (or else it'll cross over itself). For
+                # example, use coord system (x, y) with (0, 0) at top-left: if we're on the clockwise side of a hook on
+                # the top side with coords (10, 0) then moving to something like (0, 2) would be really bad because the
+                # reverse of that move is tight & crosses over itself. We also shouldn't sharply move clockwise, but the
+                # restriction here is a bit more relaxed.
+                n_nodes_on_adj_side = nodes_per_side_list[(i_side + 1) % 4]
+                ac_corner = starting_idx_list[(i_side + 1) % 4]  # node at the corner anticlockwise to `i`
+                c_corner = starting_idx_list[i_side]  # node at the corner clockwise to `i`
+                assert c_corner <= i < (ac_corner or n4), f"Error: {c_corner=}, {i=}, {ac_corner=}"
+
+                banned_anticlockwise = range(
+                    ac_corner, ac_corner + min(n_nodes_on_adj_side, int((ac_corner - i) * critical_fracs[i % 2]))
+                )
+                banned_clockwise = range(
+                    c_corner - min(n_nodes_on_adj_side, int((i - c_corner) * critical_fracs[1 - i % 2])), c_corner
+                )
+                d_joined[i] = sorted(set(d_joined[i]) - set(banned_anticlockwise) - set(banned_clockwise))
 
         # =============== compute archetypal pixels and fill the pixel tensor ===============
 
@@ -385,52 +398,26 @@ def build_through_pixels_dict(
 
         coords = t.stack([t.from_numpy(y_coords), t.from_numpy(x_coords)]).T
 
+        # Critical fraction gets converted to a number of nodes, i.e. all lines should be >= this distance (we
+        # can do this because we assume symmetry in the ellipse)
+        critical_n_nodes = [int(c * n_nodes) for c in critical_fracs]
+
         d_sides = None
         d_joined = {n: [] for n in range(n_nodes)}
         for i, coord in enumerate(coords):
             d_coords[i] = coord
 
             # Iterate around the nodes anticlockwise, with restrictions:
-            #   - if abs(angle) < critical_angle, then we skip it
-            #   - if abs(angle) < critical_angle_for_hook_sides, then we only do one side of it
+            #   - if abs(angle) < critical_frac, then we skip it
+            #   - if abs(angle) < critical_frac_for_hook_sides, then we only do one side of it
             # So we have 2 possible reasons to add a node to the list:
-            #   - abs(angle) > critical_angle_for_hook_sides
-            #   - abs(angle) is in [critical_angle, critical_angle_for_hook_sides] range, and it's the correct side
+            #   - abs(angle) > critical_frac_for_hook_sides
+            #   - abs(angle) is in [critical_frac, critical_frac_for_hook_sides] range, and it's the correct side
 
-            # Weird thing - I'd been getting really bad quality images using the parity version, until
-            # I realized that the parity version is wrong because lines are drawn backwards! This made
-            # the restriction easier to write, and less image degrading. However, I still don't know
-            # why the old version was causing me to have bad images, bit annoying.
-
-            # start, end = (
-            #     (critical_distance_for_hook_sides, critical_distance)
-            #     if i % 2 == 0
-            #     else (critical_distance, critical_distance_for_hook_sides)
-            # )
-            # all_j = (np.arange(start, n_nodes - end) + i) % n_nodes
-            # d_joined[i] = all_j.tolist()
-
-            critical_distance_start, critical_distance_end = (
-                (critical_distance_for_hook_sides, critical_distance)
-                if i % 2 == 0
-                else (critical_distance, critical_distance_for_hook_sides)
-            )
-
+            critical_n_nodes_start, critical_n_nodes_end = critical_n_nodes[:: 1 if i % 2 == 0 else -1]
             d_joined[i] = sorted(
-                np.mod(
-                    range(i + critical_distance_start + 1, i + (n_nodes - critical_distance_end)),
-                    n_nodes,
-                )
+                np.mod(range(i + critical_n_nodes_start + 1, i + (n_nodes - critical_n_nodes_end)), n_nodes)
             )
-
-            # for j in range(n_nodes):
-            #     diff_ac = (j - i) % n_nodes
-            #     diff_c = (i - j) % n_nodes
-            #     diff = min(diff_ac, diff_c)
-            #     if (diff > critical_distance_for_hook_sides) or (
-            #         diff > critical_distance and (j % 2 == 0) == (diff_ac < diff_c)
-            #     ):
-            #         d_joined[i].append(j)
 
         # The second half are added via symmetry
         # total = sum([len(d_joined[i]) for i in d_joined]) // 4
@@ -464,32 +451,65 @@ def build_through_pixels_dict(
         if only_return_d_coords:
             return d_coords
 
-    # Print the estimated size in MB of each dictionary
-    sizes = {
-        "d_coords": get_size_mb(d_coords),
-        "d_joined": get_size_mb(d_joined),
-        "d_sides": get_size_mb(d_sides),
-        "d_archetypes": get_size_mb(d_archetypes),
-        "t_pixels": get_size_mb(t_pixels),
-    }
-    print("\nObject sizes in MB:")
-    print("-" * 30)
-    for obj_name, size in sizes.items():
-        print(f"{obj_name}: {size:.4f} MB")
-    print(f"Total: {sum(sizes.values()):.4f} MB")
-
-    # =============== populate the tensor ===============
-
     # We overestimated to get the size of t_pixels, so we need to truncate it
     t_pixels_sum = t_pixels.sum(dim=(0, 1))
     max_pixels = t_pixels_sum.nonzero()[-1].item()
-    print(f"Cropping {t_pixels.shape[-1] - max_pixels} pixels")
-    t_pixels = t_pixels[:, :, :max_pixels]
+    t_pixels_cropped = t_pixels[:, :, :max_pixels]
 
-    if not debug:
+    # Turn d_joined into a symmetric dict
+    if make_symmetric:
+        for i, j_list in d_joined.items():
+            d_joined[i] = [j for j in j_list if i in d_joined[j]]
+
+    if debug:
+        # > Print the estimated size in MB of each dictionary
+        sizes = {
+            "d_coords": get_size_mb(d_coords),
+            "d_joined": get_size_mb(d_joined),
+            "d_sides": get_size_mb(d_sides),
+            "d_archetypes": get_size_mb(d_archetypes),
+            "t_pixels": get_size_mb(t_pixels),
+            "t_pixels_cropped": get_size_mb(t_pixels_cropped),
+        }
+        print("\nObject sizes in MB:")
+        print("-" * 30)
+        for obj_name, size in sizes.items():
+            print(f"{obj_name}: {size:.4f} MB")
+        print(f"Total: {sum(sizes.values()):.4f} MB")
+        # > For 6 randomly chosen points, plot the lines that they connect to
+        # Choose 6 random nodes
+        selected_nodes = random.sample(list(d_coords.keys()), 6)
+        fig, axes = plt.subplots(3, 2, figsize=(15, int(20 * y / x)))
+        axes = axes.flatten()
+        for i, node in enumerate(selected_nodes):
+            ax = axes[i]
+            # Plot the selected node (red)
+            cy, cz = d_coords[node]
+            ax.plot(cz, cy, "ro", markersize=8)
+            # Plot its adjacent node (blue)
+            adj_node = node + (1 if node % 2 == 0 else -1)
+            cy_adj, cz_adj = d_coords[adj_node]
+            ax.plot(cz_adj, cy_adj, "o", color="#00d7e1", markersize=6)
+            # Plot connected nodes (black)
+            if node in d_joined:
+                for connected_node in d_joined[node]:
+                    if connected_node in d_coords:
+                        cy, cx = d_coords[connected_node]
+                        ax.plot(cx, cy, "ko", markersize=4)
+            # Remove all visual elements except dots
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["bottom"].set_visible(False)
+            ax.spines["left"].set_visible(False)
+            ax.set_aspect("equal")
+        plt.tight_layout()
+        plt.show()
+    else:
         clear_output()
 
-    return d_coords, d_joined, d_sides, t_pixels
+    return d_coords, d_joined, d_sides, t_pixels_cropped
 
 
 # def node_distance(i: int, j: int, n_nodes: int, signed: bool = False) -> int | tuple[int, int]:
