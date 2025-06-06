@@ -71,7 +71,7 @@ class ThreadArtColorParams:
     # ^ if more than 1.0 then we take slightly larger jumps over pixels when drawing lines (t_pixels uses less memory)
     debug_through_pixels_dict: bool = False
     # ^ if True, we leave all the debug print statements e.g. tensor sizes, if false then we only print post init time
-    mode: Literal["color", "monochrome"] = "color"
+    mode: Literal["color", "monochrome", "monochrome-draw"] = "color"
     # ^ For black and white images (hacky)
     critical_fracs: tuple[float, float | None] = (0.02, None)
     critical_frac_penalty_power_decay: float | None = None
@@ -93,6 +93,19 @@ class ThreadArtColorParams:
 
     @classmethod
     def from_dict(cls, args_dict: dict) -> "ThreadArtColorParams":
+        # Deal with monochrome case
+        if "monochrome" in args_dict.get("mode", "color"):
+            assert isinstance(args_dict["darkness"], float)
+            assert isinstance(args_dict["n_lines_per_color"], int)
+            args_dict |= dict(
+                palette=[(255, 255, 255), (0, 0, 0)],
+                darkness=[0.0, args_dict["darkness"]],
+                # group_orders="1,2",
+                group_orders="2",  # works?
+                n_lines_per_color=[1, args_dict["n_lines_per_color"]],
+                flip_hook_parity=args_dict["mode"] == "monochrome",
+            )
+
         return cls(**args_dict)
 
     def __post_init__(self):
@@ -605,6 +618,7 @@ class Img:
         # The amount they're decreased by equals the negative values they'll have after subtracting the darkness, scaled by
         # the neg_penalty_multiplier (e.g. if value is 0.2, darkness is 0.5, multiplier is 0.5, then we would decrease the
         # score by 0.5 * (0.5 - 0.2) = 0.15 to reflect how we're de-incentivising pushing into negative values).
+        assert neg_penalty_multiplier >= 0, "Negative penalty multiplier must be non-negative"
         if neg_penalty_multiplier > 1e-6:
             pixel_values -= neg_penalty_multiplier * (darkness - pixel_values).clamp(min=0.0)
 
