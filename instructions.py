@@ -35,7 +35,6 @@ def generate_thread_art_gcode(
     inner_radius: int = 10,
     outer_radius: int = 5,
     test_distance: int = 0,
-    flip_hook_parity: bool = True,
 ) -> list[list[str]]:
     """
     Generates full thread art GCode, by breaking down each line dict color according to group orders.
@@ -50,8 +49,6 @@ def generate_thread_art_gcode(
         inner_radius: How far inside the hook do we go before going outside and looping around it
         outer_radius: How far outside the hook do we go before looping around it (only applies if lines not arcs)
         test_distance: If supplied, we subtract this many mm from radius (so we can test going close to edge, not on it)
-        flip_hook_parity: If True, we flip the parity of the hooks when we travel (i.e. we're doing the piece with
-          threads, not drawing it)
     """
     # # Gets the estimated center and radius of the circle, from the `coords` supplied
     # coords_normalized = {index / n_nodes: coord for index, coord in coords.items()}
@@ -78,7 +75,6 @@ def generate_thread_art_gcode(
         arc_feed_rate=arc_feed_rate,
         inner_radius=inner_radius,
         outer_radius=outer_radius,
-        flip_hook_parity=flip_hook_parity,
         use_origin=True,
     )
     gcode.append(debug_lines)
@@ -110,7 +106,6 @@ def generate_thread_art_gcode(
             arc_feed_rate=arc_feed_rate,
             inner_radius=inner_radius,
             outer_radius=outer_radius,
-            flip_hook_parity=flip_hook_parity,
         )
         gcode.append(lines)
 
@@ -126,7 +121,6 @@ def _generate_thread_art_gcode_single_line_group(
     arc_feed_rate: int | None,
     inner_radius: int = 10,
     outer_radius: int = 5,
-    flip_hook_parity: bool = True,
     use_origin: bool = False,
 ) -> list[str]:
     """
@@ -145,12 +139,18 @@ def _generate_thread_art_gcode_single_line_group(
         arc_feed_rate: Movement speed in mm/min, for the slower arcs around hooks
         inner_radius: How far inside the hook we move before going outside and looping around it
         outer_radius: How far outside the hook we go before looping around it (only applies if lines not arcs)
-        flip_hook_parity: If True, we flip the parity of the hooks when we travel (i.e. we're doing the piece with
-            threads, not drawing it)
         use_origin: If True, we visit origin between each move (for debugging)
     """
     feed_rate_lines = f"F{feed_rate:.0f}" if feed_rate else ""
     feed_rate_arcs = f"F{arc_feed_rate:.0f}" if arc_feed_rate else feed_rate_lines
+
+    # Check if we're flipping parity of the hooks
+    if len(line_list) >= 2:
+        line_list_diff_0 = line_list[0][1] - line_list[1][0]
+        assert abs(line_list_diff_0) <= 1
+        flip_hook_parity = line_list_diff_0 == 1
+    else:
+        flip_hook_parity = True
 
     # Get unit radius positions of all nodes (i.e. the edges of hooks)
     hook_angles = (np.arange(0, n_nodes) - 1.5) * 2 * math.pi / n_nodes + starting_angle
