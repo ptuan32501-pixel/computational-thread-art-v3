@@ -40,12 +40,15 @@ def scale_down(n_lines_per_color, target):
 
 
 def get_color_hash(c):
-    assert isinstance(c, Tensor)
+    assert isinstance(c, (Tensor, np.ndarray))
+    assert c.shape[0] == 3
     return 256 * 256 * c[0] + 256 * c[1] + c[2]
 
 
 def get_img_hash(i):
-    assert isinstance(i, Tensor)
+    assert isinstance(i, (Tensor, np.ndarray))
+    assert i.ndim == 3
+    assert i.shape[2] == 3
     return 256 * 256 * i[:, :, 0] + 256 * i[:, :, 1] + i[:, :, 2]
 
 

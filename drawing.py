@@ -1,12 +1,19 @@
 import enum
+import math
 import pprint
+import time
 from dataclasses import dataclass
 from typing import Literal
 
+import einops
 import numpy as np
+import plotly.express as px
 import tqdm
 from jaxtyping import Float, Int
 from PIL import Image, ImageDraw
+
+from image_color import blur_image
+from misc import get_color_hash, get_img_hash
 
 Arr = np.ndarray
 
@@ -260,103 +267,164 @@ class Shape:
         return coords, pixels, final_dir
 
 
+# TODO - allow this code to be re-used? (it's mostly copy-pased from `image_color.py`)
+
+
 @dataclass
-class Drawing:
+class TargetImage:
     image_path: str
     weight_image_path: str | None
+    palette: list[tuple[int, int, int]]
     x: int
     output_x: int
-
-    n_shapes: int
-    n_random: int
-    darkness: float
-    negative_penalty: float
-
-    shape: Shape
+    blur_rad: float | None = 4
+    display_dithered: bool = False
 
     def __post_init__(self):
-        self.image = Image.open(self.image_path).convert("L")
-        self.weight_image = None if self.weight_image_path is None else Image.open(self.weight_image_path).convert("L")
-        width, height = self.image.size
+        # Load in image
+        image = Image.open(self.image_path).convert("L" if len(self.palette) == 1 else "RGB")
+
+        # Optionally load in (and turn to an array) the weight image
+        self.weight_image = None
+        if self.weight_image_path is not None:
+            weight_image = Image.open(self.weight_image_path).convert("L")
+            self.weight_image = np.asarray(weight_image.resize((self.x, self.y))).astype(np.float32) / 255
+
+        # Get dimensions (for target and output images)
+        width, height = image.size
         self.y = int(self.x * height / width)
         self.output_sf = self.output_x / self.x
         self.output_y = int(self.y * self.output_sf)
 
-    def create_img(self) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], Float[Arr, "n_pixels 2"]]:
-        # Create a copy of the target image, to draw on
-        image = 1.0 - np.asarray(self.image.resize((self.x, self.y))).astype(np.float32) / 255
-        weight_image = (
-            None
-            if self.weight_image is None
-            else np.asarray(self.weight_image.resize((self.x, self.y))).astype(np.float32) / 255
-        )
+        # Optionally perform dithering, and get `self.image_dict` for use in `Drawing`
+        image_arr = np.asarray(image.resize((self.x, self.y)))
+        if len(self.palette) == 1:
+            self.image_dict = {self.palette[0]: 1.0 - image_arr.astype(np.float32) / 255}
+        else:
+            assert (255, 255, 255) not in self.palette, "White should not be in palette"
+            image_dithered = FS_dither(image_arr, [(255, 255, 255)] + self.palette)
+            self.image_dict = {
+                color: (get_img_hash(image_dithered) == get_color_hash(np.array(color))).astype(np.float32)
+                for color in self.palette
+            }
+            if self.blur_rad is not None:
+                self.image_dict = {color: blur_image(img, self.blur_rad) for color, img in self.image_dict.items()}
 
+        # Display the dithered image
+        if self.display_dithered:
+            background_colors = [
+                np.array([255, 255, 255]) if sum(color) < 255 + 160 else np.array([0, 0, 0]) for color in self.palette
+            ]
+            dithered_images = np.concatenate(
+                [
+                    bg + img[:, :, None] * (np.array(color) - bg)
+                    for bg, (color, img) in zip(background_colors, self.image_dict.items())
+                ],
+                axis=1,
+            )
+            px.imshow(
+                dithered_images,
+                height=290,
+                width=100 + 200 * len(self.palette),
+                title=" | ".join([str(x) for x in self.palette]),
+            ).update_layout(margin=dict(l=10, r=10, t=40, b=10)).show()
+
+
+@dataclass
+class Drawing:
+    target: TargetImage
+
+    shape: Shape
+
+    n_shapes: int | list[int]
+    n_random: int
+    darkness: float | list[float]
+    negative_penalty: float
+
+    def create_img(self) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], Float[Arr, "n_pixels 2"]]:
         # Get our starting position & direction (posn is random, direction is pointing inwards)
-        start_coords = (0.1 + 0.8 * np.random.rand(2)) * np.array([self.y, self.x])
-        start_coords_offset = start_coords - np.array([self.y, self.x]) / 2
+        start_coords = (0.1 + 0.8 * np.random.rand(2)) * np.array([self.target.y, self.target.x])
+        start_coords_offset = start_coords - np.array([self.target.y, self.target.x]) / 2
         start_dir = -start_coords_offset / (np.linalg.norm(start_coords_offset) + 1e-6)
 
-        params_list = []
-        pbar = tqdm.tqdm(range(self.n_shapes))
+        # If any parameters were given as a single number, convert them to lists
+        if isinstance(self.darkness, float):
+            self.darkness = [self.darkness] * len(self.target.palette)
+        if isinstance(self.n_shapes, int):
+            self.n_shapes = [self.n_shapes]
+        assert len(self.n_shapes) == len(self.target.palette), "Should give num shapes for each color"
 
-        all_coords = []
+        # Create dicts to store params and coords for each color
+        all_params = {}
+        all_coords = {}
 
-        for step in pbar:
-            # Get our random parameterized shapes
-            coords_list = self.shape.get_drawing_coords_list(
-                n_shapes=self.n_random,
-                start_dir=start_dir,
-                start_coords=start_coords,
-                canvas_y=self.y,
-                canvas_x=self.x,
-            )
+        for color, n_shapes, darkness in zip(self.target.palette, self.n_shapes, self.darkness, strict=True):
+            if n_shapes == 0:
+                continue
 
-            # Turn them into integer pixels, and concat them
-            pixels = [coords.astype(np.int32) for _, coords, _ in coords_list]
-            n_pixels = [coords.shape[-1] for _, coords, _ in coords_list]
-            pixels = np.stack([pad_to_length(p, max(n_pixels)) for p in pixels])  # (n_rand, 2, n_pix)
+            image = self.target.image_dict[color]
+            all_coords[color] = []
+            all_params[color] = []
+            pbar = tqdm.tqdm(range(n_shapes), desc=f"Drawing {color}")
 
-            # Get the pixels values of the target image at these coords
-            pixel_values = image[pixels[:, 0], pixels[:, 1]]  # (n_rand, n_pix)
-            pixel_values_mask = np.any(pixels != 0, axis=1)  # (n_rand, n_pix)
+            for step in pbar:
+                # Get our random parameterized shapes
+                coords_list = self.shape.get_drawing_coords_list(
+                    n_shapes=self.n_random,
+                    start_dir=start_dir,
+                    start_coords=start_coords,
+                    canvas_y=self.target.y,
+                    canvas_x=self.target.x,
+                )
 
-            # Apply negative penalty and weighting
-            if self.negative_penalty > 0.0:
-                # pixel_values[pixel_values < 0.0] *= 1 + self.negative_penalty
-                pixel_values -= self.negative_penalty * np.maximum(0.0, self.darkness - pixel_values)
+                # Turn them into integer pixels, and concat them
+                pixels = [coords.astype(np.int32) for _, coords, _ in coords_list]
+                n_pixels = [coords.shape[-1] for _, coords, _ in coords_list]
+                pixels = np.stack([pad_to_length(p, max(n_pixels)) for p in pixels])  # (n_rand, 2, n_pix)
 
-            if weight_image is not None:
-                pixel_weights = weight_image[pixels[:, 0], pixels[:, 1]]  # (n_rand, n_pix)
-                pixel_values_mask = pixel_values_mask.astype(pixel_values.dtype) * pixel_weights
+                # Get the pixels values of the target image at these coords
+                pixel_values = image[pixels[:, 0], pixels[:, 1]]  # (n_rand, n_pix)
+                pixel_values_mask = np.any(pixels != 0, axis=1)  # (n_rand, n_pix)
 
-            # Average over each pixel array
-            pixel_values = (pixel_values * pixel_values_mask).sum(-1) / (pixel_values_mask.sum(-1) + 1e-8)
+                # Apply negative penalty and weighting
+                if self.negative_penalty > 0.0:
+                    # pixel_values[pixel_values < 0.0] *= 1 + self.negative_penalty
+                    pixel_values -= self.negative_penalty * np.maximum(0.0, self.darkness - pixel_values)
 
-            # Pick the darkest shape to draw
-            best_idx = np.argmax(pixel_values)
-            best_params, best_coords, best_end_dir = coords_list[best_idx]
+                if self.target.weight_image is not None:
+                    pixel_weights = self.target.weight_image[pixels[:, 0], pixels[:, 1]]  # (n_rand, n_pix)
+                    pixel_values_mask = pixel_values_mask.astype(pixel_values.dtype) * pixel_weights
 
-            # Subtract it from the target image, and write it to the canvas
-            best_pixels = best_coords.astype(np.int32)
-            image[best_pixels[0], best_pixels[1]] -= self.darkness
-            params_list.append(best_params)
-            all_coords.append(best_coords)
+                # Average over each pixel array
+                pixel_values = (pixel_values * pixel_values_mask).sum(-1) / (pixel_values_mask.sum(-1) + 1e-8)
 
-            # best_pixels_large = (best_coords * self.output_x / self.x).astype(np.int32)
-            # canvas[*best_pixels_large] = 0
+                # Pick the darkest shape to draw
+                best_idx = np.argmax(pixel_values)
+                best_params, best_coords, best_end_dir = coords_list[best_idx]
 
-            # This end dir is the new start dir (same for position)
-            start_dir = best_end_dir
-            start_coords = best_coords[:, -1]
+                # Subtract it from the target image, and write it to the canvas
+                best_pixels = best_coords.astype(np.int32)
+                image[best_pixels[0], best_pixels[1]] -= darkness
+                all_params[color].append(best_params)
+                all_coords[color].append(best_coords)
+
+                # best_pixels_large = (best_coords * self.output_x / self.x).astype(np.int32)
+                # canvas[*best_pixels_large] = 0
+
+                # This end dir is the new start dir (same for position)
+                start_dir = best_end_dir
+                start_coords = best_coords[:, -1]
 
         # Create canvas and draw on it
-        canvas = Image.new("L", (self.output_x, self.output_y), 255)
+        canvas = Image.new("RGB", (self.target.output_x, self.target.output_y), (255, 255, 255))
         draw = ImageDraw.Draw(canvas)
-        all_coords = (self.output_sf * np.concatenate(all_coords, axis=1)).T.tolist()  # shape (n_pixels, 2)
-        for (y0, x0), (y1, x1) in zip(all_coords[:-1], all_coords[1:]):
-            draw.line([(x0, y0), (x1, y1)], fill="black", width=1)
+        for color, coords in all_coords.items():
+            all_coords[color] = np.concatenate(coords, axis=1).T  # shape (n_pixels, 2)
+            coords = (self.target.output_sf * all_coords[color]).tolist()
+            for (y0, x0), (y1, x1) in zip(coords[:-1], coords[1:]):
+                draw.line([(x0, y0), (x1, y1)], fill=color, width=1)
 
-        return params_list, canvas, image, np.array(all_coords)
+        return all_params, canvas, image, all_coords
 
 
 def mask_coords(
@@ -373,6 +441,161 @@ def pad_to_length(arr: np.ndarray, length: int, axis: int = -1, fill_value: floa
     assert length >= target_shape[axis]
     target_shape[axis] = length - target_shape[axis]
     return np.concat([arr, np.full_like(arr, fill_value=fill_value, shape=tuple(target_shape))], axis=axis)
+
+
+def FS_dither(
+    image: Int[Arr, "y x 3"],
+    palette: list[tuple[int, int, int]],
+    pixels_per_batch: int = 32,
+    num_overlap_rows: int = 6,
+) -> tuple[Float[Arr, "y x 3"], float]:
+    t0 = time.time()
+
+    image_dithered: Float[Arr, "y x 3"] = image.astype(np.float32)
+    y, x = image_dithered.shape[:2]
+
+    num_batches = math.ceil(y / pixels_per_batch)
+    rows_to_extend_by = num_batches - (y % num_batches)
+
+    # Add a batch dimension
+    image_dithered = einops.rearrange(
+        np.concatenate([image_dithered, np.zeros((rows_to_extend_by, x, 3))]),
+        "(batch y) x rgb -> y x batch rgb",
+        batch=num_batches,
+    )
+    # Concat the last `num_overlap_rows` to the start of the image
+    end_of_each_batch = np.concatenate(
+        [np.zeros((num_overlap_rows, x, 1, 3)), image_dithered[-num_overlap_rows:, :, :-1]], axis=-2
+    )
+    image_dithered = np.concatenate([end_of_each_batch, image_dithered], axis=0)
+
+    image_dithered = FS_dither_batch(image_dithered, palette)
+
+    image_dithered = einops.rearrange(
+        image_dithered[num_overlap_rows - 1 : -1],
+        "y x batch rgb -> (batch y) x rgb",
+    )[1 : y + 1]
+
+    print(f"FS dithering complete in {time.time() - t0:.2f}s")
+
+    return image_dithered
+
+
+def FS_dither_batch(
+    image_dithered: Float[Arr, "y x batch 3"],
+    palette: list[tuple[int, int, int]],
+) -> Int[Arr, "y x batch 3"]:
+    # Define the constants we'll multiply with when "shifting the errors" in dithering
+    AB = np.array([3, 5]) / 16
+    ABC = np.array([3, 5, 1]) / 16
+    BC = np.array([5, 1]) / 16
+
+    palette = np.array(palette)  # [palette 3]
+
+    # Set up stuff
+    palette_sq = einops.rearrange(palette, "palette rgb -> palette 1 rgb")
+    y, x, batch = image_dithered.shape[:3]
+    is_clamp = True
+
+    # loop over each row, from first to second last
+    for y_ in range(y - 1):
+        row = image_dithered[y_].astype(np.float32)  # [x batch 3]
+        next_row = np.zeros_like(row)  # [x batch 3]
+
+        # deal with the first pixel in the row
+        old_color = row[0]  # [batch 3]
+        color_diffs = ((palette_sq - old_color) ** 2).sum(axis=-1)  # [palette batch]
+        color = palette[color_diffs.argmin(axis=0)]  # [batch 3]
+        color_diff = old_color - color  # [batch 3]
+        row[0] = color
+        row[1] += (7 / 16) * color_diff
+        next_row[[0, 1]] += einops.einsum(BC, color_diff, "two, batch rgb -> two batch rgb")
+
+        # loop over each pixel in the row, from second to second last
+        for x_ in range(1, x - 1):
+            old_color = row[x_]  # [batch 3]
+            color_diffs = ((palette_sq - old_color) ** 2).sum(axis=-1)  # [colors batch]
+            color = palette[color_diffs.argmin(axis=0)]
+            color_diff = old_color - color
+            row[x_] = color
+            row[x_ + 1] += (7 / 16) * color_diff
+            next_row[[x_ - 1, x_, x_ + 1]] += einops.einsum(ABC, color_diff, "three, batch rgb -> three batch rgb")
+
+        # deal with the last pixel in the row
+        old_color = row[-1]
+        color_diffs = ((palette_sq - old_color) ** 2).sum(axis=-1)
+        color = palette[color_diffs.argmin(axis=0)]
+        color_diff = old_color - color
+        row[-1] = color
+        next_row[[-2, -1]] += einops.einsum(AB, color_diff, "two, batch rgb -> two batch rgb")
+
+        # update the rows, i.e. changing current row and propagating errors to next row
+        image_dithered[y_] = np.clip(row, 0, 255)
+        image_dithered[y_ + 1] += next_row
+        if is_clamp:
+            image_dithered[y_ + 1] = np.clip(image_dithered[y_ + 1], 0, 255)
+
+    # deal with the last row
+    row = image_dithered[-1]
+    for x_ in range(x - 1):
+        old_color = row[x_]
+        color_diffs = ((palette_sq - old_color) ** 2).sum(axis=-1)
+        color = palette[color_diffs.argmin(axis=0)]
+        color_diff = old_color - color
+        row[x_] = color
+        row[x_ + 1] += color_diff
+
+    # deal with the last pixel in the last row
+    old_color = row[-1]
+    color_diffs = ((palette_sq - old_color) ** 2).sum(axis=-1)
+    color = palette[color_diffs.argmin(axis=0)]
+    row[-1] = color
+    if is_clamp:
+        row = np.clip(row, 0, 255)
+    image_dithered[-1] = row
+    # pbar.close()
+
+    return image_dithered.astype(np.int32)
+
+
+def make_gcode(
+    all_coords: dict[tuple[int, int, int], Int[Arr, "n_coords 2"]],
+    center: tuple[float, float],
+    radius: tuple[float, float],
+    speed: int = 10_000,
+) -> dict[tuple[int, int, int], list[str]]:
+    # Normalize coordinates. We shrink them the minimum possible amount to fit
+    # in the circle (or in reality the square) with the given center and radius.
+
+    min_x = min(coords[:, 0].min() for coords in all_coords.values())
+    min_y = min(coords[:, 1].min() for coords in all_coords.values())
+    max_x = max(coords[:, 0].max() for coords in all_coords.values())
+    max_y = max(coords[:, 1].max() for coords in all_coords.values())
+    max_range = max(max_x - min_x, max_y - min_y)
+    mid_x = (min_x + max_x) / 2
+    mid_y = (min_y + max_y) / 2
+
+    for color, coords in all_coords.items():
+        coords[:, 0] = (coords[:, 0] - mid_x) / (0.5 * max_range)  # normalize x to [-1, 1]
+        coords[:, 1] = (coords[:, 1] - mid_y) / (0.5 * max_range)  # normalize y to [-1, 1]
+        coords[:, 0] = coords[:, 0] * radius[0] + center[0]  # scale x to [center-radius, center+radius]
+        coords[:, 1] = coords[:, 1] * radius[1] + center[1]  # scale y to [center-radius, center+radius]
+
+    lines = {}
+
+    for color, coords_list in all_coords.items():
+        lines[color] = ["M3S250 ; raise at the start"]
+
+        for i, (x, y) in enumerate(coords_list):
+            lines[color].append(f"G1 X{x:.3f} Y{y:.3f} F{speed if i > 0 else 5000}")
+            if i == 0:
+                lines[color].append("M3S0 ; lower (to start drawing)")
+
+        lines[color].append("M3S250 ; raise (end drawing)")
+
+    # print("\n".join(lines[:20]))
+    # pyperclip.copy("\n".join(lines[50_000:]))
+    return lines
 
 
 # ! Demo code (ignore everything below this line)

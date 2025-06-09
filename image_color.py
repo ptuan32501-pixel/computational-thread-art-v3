@@ -1038,7 +1038,7 @@ def load_template(filename: str, replace_dict: dict = {}) -> str:
 
 
 # Blurs the monochromatic images (used in the function below)
-def linear_blur_image(image: Tensor, rad: int, threeD=False):
+def linear_blur_image(image: Tensor | np.ndarray, rad: int, threeD=False):
     if rad == 0:
         return image
 
@@ -1056,23 +1056,24 @@ def linear_blur_image(image: Tensor, rad: int, threeD=False):
     # create a canvas larger than the image, then loop over the matrix adding the appropriate copies of the canvas
     if threeD:
         image_size_y, image_size_x, _ = image.shape
-        canvas_size_y = image.size(0) + 2 * rad
-        canvas_size_x = image.size(1) + 2 * rad
+        canvas_size_y = image.shape[0] + 2 * rad
+        canvas_size_x = image.shape[1] + 2 * rad
         canvas = t.zeros(canvas_size_y, canvas_size_x, 3)
         for x in range(2 * rad + 1):
             for y in range(2 * rad + 1):
                 canvas[y : y + image_size_y, x : x + image_size_x, :] += mat[y, x] * image
     else:
         image_size_y, image_size_x = image.shape
-        canvas_size_y = image.size(0) + 2 * rad
-        canvas_size_x = image.size(1) + 2 * rad
+        canvas_size_y = image.shape[0] + 2 * rad
+        canvas_size_x = image.shape[1] + 2 * rad
         canvas = t.zeros(canvas_size_y, canvas_size_x)
         for x in range(2 * rad + 1):
             for y in range(2 * rad + 1):
                 canvas[y : y + image_size_y, x : x + image_size_x] += mat[y, x] * image
 
     # crop the canvas, and return it
-    return canvas[rad:-rad, rad:-rad]
+    canvas = canvas[rad:-rad, rad:-rad]
+    return canvas if isinstance(image, Tensor) else canvas.numpy()
 
 
 # Performs either linear blurring (image above) or Gaussian (used in `create_canvas` function, for image processing before creating output)
