@@ -2,6 +2,7 @@ import enum
 import math
 import pprint
 import time
+from calendar import c
 from dataclasses import dataclass
 from typing import Literal
 
@@ -40,6 +41,9 @@ class Shape:
     line_type: LineType | None = None
     shape_type: ShapeType | None = None
     character_path: str | None = None
+
+    # Not parameter-specific
+    max_out_of_bounds: int | None = None # No lines are allowed to go more than this far out of bounds, at any point
 
     # * Used for shapes and lines (not characters)
     size_range: tuple[float, float] = (0.05, 0.15)  # size range (means smth different for arcs)
@@ -116,7 +120,8 @@ class Shape:
         start_coords: Float[Arr, "2"],
         canvas_y: int,
         canvas_x: int,
-    ) -> list[tuple[dict, Float[Arr, "2 n_pixels"], Float[Arr, "2"]]]:
+        max_out_of_bounds: int | None = None,
+    ) -> list[tuple[dict, Float[Arr, "2 n_pixels"], Float[Arr, "2 n_pixels"], Float[Arr, "2"]]]:
         """Generates `n_shapes` random shapes, and returns a list of their coords.
 
         Args:
@@ -125,9 +130,14 @@ class Shape:
             start_coords: Coordinates to start the shape at
             canvas_y: Height of the canvas
             canvas_x: Width of the canvas
+            max_out_of_bounds: Maximum number of pixels allowed to be out of bounds (if None, no limit)
 
         Returns:
-            List of tuples, each containing the parameters and coordinates of a shape (and end dir).
+            List of the following:
+            - params: Dictionary of parameters used to generate the shape
+            - coords: (2, n_pixels) array of float coordinates for the shape
+            - coords_uncropped: (2, n_pixels) without cropping at sides (useful for final drawing)
+            - pixels: (2, n_pixels) array of integer (y, x) coordinates for the shape
         """
         canvas_length = min(canvas_x, canvas_y)
 
@@ -145,12 +155,12 @@ class Shape:
                 start_coords = np.random.rand(2) * np.array([canvas_x, canvas_y])
 
             # Get the actual coordinates for this shape
-            coords, _, end_dir = self.draw_curve(start_coords, start_dir, **params)
+            coords_uncropped, _, end_dir = self.draw_curve(start_coords, start_dir, **params)
 
-            # Crop parts of `coords` which go off the edge, and only keep ones which are in bounds
-            coords = mask_coords(coords, canvas_y, canvas_x, remove=True)
+            # Crop parts of `coords` which go off the edge, and only keep ones which are in bounds anywhere
+            coords = mask_coords(coords_uncropped, canvas_y, canvas_x, remove=True, max_out_of_bounds=max_out_of_bounds)
             if coords.shape[-1] > 0:
-                coords_list.append((params, coords, end_dir))
+                coords_list.append((params, coords, coords_uncropped, end_dir))
 
         return coords_list
 
@@ -340,6 +350,7 @@ class Drawing:
     n_random: int
     darkness: float | list[float]
     negative_penalty: float
+    max_out_of_bounds: int | None
 
     def create_img(self) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], Float[Arr, "n_pixels 2"]]:
         # Get our starting position & direction (posn is random, direction is pointing inwards)
@@ -375,11 +386,12 @@ class Drawing:
                     start_coords=start_coords,
                     canvas_y=self.target.y,
                     canvas_x=self.target.x,
+                    max_out_of_bounds=self.max_out_of_bounds
                 )
 
                 # Turn them into integer pixels, and concat them
-                pixels = [coords.astype(np.int32) for _, coords, _ in coords_list]
-                n_pixels = [coords.shape[-1] for _, coords, _ in coords_list]
+                pixels = [coords.astype(np.int32) for _, coords, _, _ in coords_list]
+                n_pixels = [coords.shape[-1] for _, coords, _, _ in coords_list]
                 pixels = np.stack([pad_to_length(p, max(n_pixels)) for p in pixels])  # (n_rand, 2, n_pix)
 
                 # Get the pixels values of the target image at these coords
@@ -400,16 +412,13 @@ class Drawing:
 
                 # Pick the darkest shape to draw
                 best_idx = np.argmax(pixel_values)
-                best_params, best_coords, best_end_dir = coords_list[best_idx]
+                best_params, best_coords, best_coords_uncropped, best_end_dir = coords_list[best_idx]
 
                 # Subtract it from the target image, and write it to the canvas
                 best_pixels = best_coords.astype(np.int32)
                 image[best_pixels[0], best_pixels[1]] -= darkness
                 all_params[color].append(best_params)
-                all_coords[color].append(best_coords)
-
-                # best_pixels_large = (best_coords * self.output_x / self.x).astype(np.int32)
-                # canvas[*best_pixels_large] = 0
+                all_coords[color].append(best_coords_uncropped)
 
                 # This end dir is the new start dir (same for position)
                 start_dir = best_end_dir
@@ -428,19 +437,34 @@ class Drawing:
 
 
 def mask_coords(
-    coords: Float[Arr, "2 n_pixels"], max_y: int, max_x: int, remove: bool = False
+    coords: Float[Arr, "2 n_pixels"],
+    max_y: int,
+    max_x: int,
+    remove: bool = False,
+    max_out_of_bounds: int | None = None,
 ) -> Float[Arr, "2 n_pixels"]:
     """Masks coordinates that go out of bounds."""
     assert coords.shape[0] == 2, "Coords should have shape (2, n_pixels)"
+
+    # Return empty array if any pixels are beyond max out of bounds
+    if max_out_of_bounds is not None:
+        if (
+            np.max([-coords[0].min(), coords[0].max() - max_y, -coords[1].min(), coords[1].max() - max_x])
+            > max_out_of_bounds
+        ):
+            return coords[:, :0]  # return empty array
+
+    # Remove all out of bounds coordinates
     out_of_bounds = (coords[0] < 0) | (coords[0] >= max_y) | (coords[1] < 0) | (coords[1] >= max_x)
-    return coords[:, ~out_of_bounds] if remove else np.where(out_of_bounds, 0.0, coords)
+    coords = coords[:, ~out_of_bounds] if remove else np.where(out_of_bounds, 0.0, coords)
+    return coords
 
 
 def pad_to_length(arr: np.ndarray, length: int, axis: int = -1, fill_value: float = 0):
     target_shape = list(arr.shape)
     assert length >= target_shape[axis]
     target_shape[axis] = length - target_shape[axis]
-    return np.concat([arr, np.full_like(arr, fill_value=fill_value, shape=tuple(target_shape))], axis=axis)
+    return np.concatenate([arr, np.full_like(arr, fill_value=fill_value, shape=tuple(target_shape))], axis=axis)
 
 
 def FS_dither(
@@ -581,6 +605,12 @@ def make_gcode(
         coords[:, 0] = coords[:, 0] * radius[0] + center[0]  # scale x to [center-radius, center+radius]
         coords[:, 1] = coords[:, 1] * radius[1] + center[1]  # scale y to [center-radius, center+radius]
 
+    min_x = min(coords[:, 0].min() for coords in all_coords.values())
+    min_y = min(coords[:, 1].min() for coords in all_coords.values())
+    max_x = max(coords[:, 0].max() for coords in all_coords.values())
+    max_y = max(coords[:, 1].max() for coords in all_coords.values())
+    print(f"Bounding box: X[{min_x:.3f}, {max_x:.3f}], Y[{min_y:.3f}, {max_y:.3f}]")
+
     lines = {}
 
     for color, coords_list in all_coords.items():
@@ -592,6 +622,7 @@ def make_gcode(
                 lines[color].append("M3S0 ; lower (to start drawing)")
 
         lines[color].append("M3S250 ; raise (end drawing)")
+        lines[color].append("G1 X0 Y0 ; return to origin")
 
     # print("\n".join(lines[:20]))
     # pyperclip.copy("\n".join(lines[50_000:]))
