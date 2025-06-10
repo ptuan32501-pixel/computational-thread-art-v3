@@ -367,7 +367,10 @@ class Drawing:
             assert self.outer_bound > 0, "Outer bound must be positive"
             assert self.inner_bound is not None and self.inner_bound > 0, "Inner bound must be supplied if outer bound is"
 
-    def create_img(self) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], dict[str, Float[Arr, "n_pixels 2"]]]:
+    def create_img(self, seed: int = 0) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], dict[str, Float[Arr, "n_pixels 2"]]]:
+
+        np.random.seed(seed)
+
         # Get our starting position & direction (posn is random, direction is pointing inwards)
         start_coords = (0.1 + 0.8 * np.random.rand(2)) * np.array([self.target.y, self.target.x])
         start_coords_offset = start_coords - np.array([self.target.y, self.target.x]) / 2
@@ -637,13 +640,14 @@ def make_gcode(
     speed: int = 10_000,
     larger_dim_is_x=True, # changes how we scale (if larger dim doesn't match what's given here, then we transpose coordinates)
     bound_by_largest_dim=False, # changes how we scale (if false, then we set the smallest dim to be radius, not the largest dim)
+    end_coords: tuple[float, float] | None = None,
 ) -> dict[tuple[int, int, int], list[str]]:
 
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
 
     # Transpose coords if necessary
     if larger_dim_is_x ^ (max_x - min_x > max_y - min_y):
-        all_coords = {color: coords[:, ::-1] for color, coords in all_coords.items()}
+        all_coords = {color: np.stack([coords[1], min_y + max_y - coords[0]], axis=-1) for color, coords in all_coords.items()}
         min_x, min_y, max_x, max_y = min_y, min_x, max_y, max_x
 
     # Get values for centering & scaling coordinates
@@ -652,29 +656,42 @@ def make_gcode(
     max_range = 1e-6 + (max if bound_by_largest_dim else min)(max_x - min_x, max_y - min_y)
 
     # Normalize coords
+    all_coords_normalized = {}
     for color, coords in all_coords.items():
         coords[:, 0] = (coords[:, 0] - mid_x) / (0.5 * max_range)  # normalize x to [-1, 1]
         coords[:, 1] = (coords[:, 1] - mid_y) / (0.5 * max_range)  # normalize y to [-1, 1]
         # assert np.abs(coords).max() <= 1.0
         coords[:, 0] = coords[:, 0] * radius[0] + center[0]  # scale x to [center-radius, center+radius]
         coords[:, 1] = coords[:, 1] * radius[1] + center[1]  # scale y to [center-radius, center+radius]
-        all_coords[color] = coords
+        all_coords_normalized[color] = coords
 
-    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
-    print(f"Bounding box: X[{min_x:.3f}, {max_x:.3f}], Y[{min_y:.3f}, {max_y:.3f}]")
+    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_normalized)
+    print(f"Bounding box:")
+    for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
+        print(f"G1 X{x:.3f} Y{y:.3f} F5000")
 
     lines = {}
 
-    for color, coords_list in all_coords.items():
+    for color, coords_list in all_coords_normalized.items():
         lines[color] = ["M3S250 ; raise at the start"]
 
+        # Add all the drawing coordinates
         for i, (x, y) in enumerate(coords_list):
             lines[color].append(f"G1 X{x:.3f} Y{y:.3f} F{speed if i > 0 else 5000}")
             if i == 0:
                 lines[color].append("M3S0 ; lower (to start drawing)")
 
+        # End the drawing
+        # TODO - end in a different way, so we raise the pen then move out of the way (not sure how to deal with pen maybe scratching)
         lines[color].append("M3S250 ; raise (end drawing)")
-        lines[color].append("G1 X0 Y0 ; return to origin")
+        if end_coords is not None:
+            lines[color].append(f"G1 X{end_coords[0]:.3f} Y{end_coords[1]:.3f} ; end position")
+
+        # Print total time this will take
+        diffs = all_coords[color][1:] - all_coords[color][:-1]
+        distances = (diffs ** 2).sum(-1) ** 0.5
+        distance_for_one_minute = 2025
+        print(f"Color {color} will take {distances.sum() / distance_for_one_minute:.2f} minutes")
 
     # print("\n".join(lines[:20]))
     # pyperclip.copy("\n".join(lines[50_000:]))
