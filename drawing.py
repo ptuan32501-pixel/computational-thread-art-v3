@@ -4,7 +4,7 @@ import pprint
 import time
 from calendar import c
 from dataclasses import dataclass
-from typing import Literal, Any
+from typing import Any, Literal
 
 import einops
 import numpy as np
@@ -43,7 +43,7 @@ class Shape:
     character_path: str | None = None
 
     # Not parameter-specific
-    max_out_of_bounds: int | None = None # No lines are allowed to go more than this far out of bounds, at any point
+    max_out_of_bounds: int | None = None  # No lines are allowed to go more than this far out of bounds, at any point
 
     # * Used for shapes and lines (not characters)
     size_range: tuple[float, float] = (0.05, 0.15)  # size range (means smth different for arcs)
@@ -365,10 +365,13 @@ class Drawing:
     def __post_init__(self):
         if self.outer_bound is not None:
             assert self.outer_bound > 0, "Outer bound must be positive"
-            assert self.inner_bound is not None and self.inner_bound > 0, "Inner bound must be supplied if outer bound is"
+            assert self.inner_bound is not None and self.inner_bound > 0, (
+                "Inner bound must be supplied if outer bound is"
+            )
 
-    def create_img(self, seed: int = 0) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], dict[str, Float[Arr, "n_pixels 2"]]]:
-
+    def create_img(
+        self, seed: int = 0
+    ) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], dict[str, Float[Arr, "n_pixels 2"]]]:
         np.random.seed(seed)
 
         # Get our starting position & direction (posn is random, direction is pointing inwards)
@@ -467,6 +470,7 @@ def get_color_string(color: tuple[int, int, int]):
     else:
         raise NotImplementedError()
 
+
 def mask_coords(
     coords: Float[Arr, "2 n_pixels"],
     max_y: int,
@@ -479,21 +483,25 @@ def mask_coords(
     assert coords.shape[0] == 2, "Coords should have shape (2, n_pixels)"
 
     # Return empty array if either (1) ANY pixels are too far out of bounds or (2) we END too close to an edge
-    max_out_of_bounds = np.max([
-        -coords[0].min() / max_y,
-        (coords[0].max() - max_y) / max_y,
-        -coords[1].min() / max_x,
-        (coords[1].max() - max_x) / max_x
-    ])
+    max_out_of_bounds = np.max(
+        [
+            -coords[0].min() / max_y,
+            (coords[0].max() - max_y) / max_y,
+            -coords[1].min() / max_x,
+            (coords[1].max() - max_x) / max_x,
+        ]
+    )
     if max_out_of_bounds > outer_bound:
         return coords[:, :0]
-    
-    end_out_of_bounds = np.max([
-        -coords[0, -1] / max_y,
-        (coords[0, -1] - max_y) / max_y,
-        -coords[1, -1] / max_x,
-        (coords[1, -1] - max_x) / max_x
-    ])
+
+    end_out_of_bounds = np.max(
+        [
+            -coords[0, -1] / max_y,
+            (coords[0, -1] - max_y) / max_y,
+            -coords[1, -1] / max_x,
+            (coords[1, -1] - max_x) / max_x,
+        ]
+    )
     if end_out_of_bounds > -inner_bound:
         return coords[:, :0]
 
@@ -638,16 +646,17 @@ def make_gcode(
     center: tuple[float, float],
     radius: tuple[float, float],
     speed: int = 10_000,
-    larger_dim_is_x=True, # changes how we scale (if larger dim doesn't match what's given here, then we transpose coordinates)
-    bound_by_largest_dim=False, # changes how we scale (if false, then we set the smallest dim to be radius, not the largest dim)
+    larger_dim_is_x=True,  # changes how we scale (if larger dim doesn't match what's given here, then we transpose coordinates)
+    bound_by_largest_dim=False,  # changes how we scale (if false, then we set the smallest dim to be radius, not the largest dim)
     end_coords: tuple[float, float] | None = None,
 ) -> dict[tuple[int, int, int], list[str]]:
-
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
 
     # Transpose coords if necessary
     if larger_dim_is_x ^ (max_x - min_x > max_y - min_y):
-        all_coords = {color: np.stack([coords[1], min_y + max_y - coords[0]], axis=-1) for color, coords in all_coords.items()}
+        all_coords = {
+            color: np.stack([coords[1], min_y + max_y - coords[0]], axis=-1) for color, coords in all_coords.items()
+        }
         min_x, min_y, max_x, max_y = min_y, min_x, max_y, max_x
 
     # Get values for centering & scaling coordinates
@@ -666,7 +675,7 @@ def make_gcode(
         all_coords_normalized[color] = coords
 
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_normalized)
-    print(f"Bounding box:")
+    print("Bounding box:")
     for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
         print(f"G1 X{x:.3f} Y{y:.3f} F5000")
 
@@ -689,7 +698,7 @@ def make_gcode(
 
         # Print total time this will take
         diffs = all_coords[color][1:] - all_coords[color][:-1]
-        distances = (diffs ** 2).sum(-1) ** 0.5
+        distances = (diffs**2).sum(-1) ** 0.5
         distance_for_one_minute = 2025
         print(f"Color {color} will take {distances.sum() / distance_for_one_minute:.2f} minutes")
 
