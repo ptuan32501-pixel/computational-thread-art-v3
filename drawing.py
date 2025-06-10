@@ -4,7 +4,7 @@ import pprint
 import time
 from calendar import c
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Any
 
 import einops
 import numpy as np
@@ -120,7 +120,8 @@ class Shape:
         start_coords: Float[Arr, "2"],
         canvas_y: int,
         canvas_x: int,
-        max_out_of_bounds: int | None = None,
+        outer_bound: float | None,
+        inner_bound: float | None,
     ) -> list[tuple[dict, Float[Arr, "2 n_pixels"], Float[Arr, "2 n_pixels"], Float[Arr, "2"]]]:
         """Generates `n_shapes` random shapes, and returns a list of their coords.
 
@@ -130,7 +131,8 @@ class Shape:
             start_coords: Coordinates to start the shape at
             canvas_y: Height of the canvas
             canvas_x: Width of the canvas
-            max_out_of_bounds: Maximum number of pixels allowed to be out of bounds (if None, no limit)
+            outer_bound: Max value out of bounds we allow ANY pixel to be
+            inner_bound: Min negative value out of bounds we allow the LAST pixel to be
 
         Returns:
             List of the following:
@@ -158,7 +160,7 @@ class Shape:
             coords_uncropped, _, end_dir = self.draw_curve(start_coords, start_dir, **params)
 
             # Crop parts of `coords` which go off the edge, and only keep ones which are in bounds anywhere
-            coords = mask_coords(coords_uncropped, canvas_y, canvas_x, remove=True, max_out_of_bounds=max_out_of_bounds)
+            coords = mask_coords(coords_uncropped, canvas_y, canvas_x, outer_bound, inner_bound, remove=True)
             if coords.shape[-1] > 0:
                 coords_list.append((params, coords, coords_uncropped, end_dir))
 
@@ -291,6 +293,9 @@ class TargetImage:
     display_dithered: bool = False
 
     def __post_init__(self):
+        # Check colors are valid (raise error if not)
+        _ = [get_color_string(color) for color in self.palette]
+
         # Load in image
         image = Image.open(self.image_path).convert("L" if len(self.palette) == 1 else "RGB")
 
@@ -350,9 +355,19 @@ class Drawing:
     n_random: int
     darkness: float | list[float]
     negative_penalty: float
-    max_out_of_bounds: int | None
 
-    def create_img(self) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], Float[Arr, "n_pixels 2"]]:
+    # Outer bound means we don't allow any lines to go further than this far out of bounds. Inner bound
+    # means we don't allow any lines to END closer than this to the edge. Inner is important because without
+    # it, we might finish 1 pixel away from the end and then we'd be totally fucked.
+    outer_bound: float | None
+    inner_bound: float | None
+
+    def __post_init__(self):
+        if self.outer_bound is not None:
+            assert self.outer_bound > 0, "Outer bound must be positive"
+            assert self.inner_bound is not None and self.inner_bound > 0, "Inner bound must be supplied if outer bound is"
+
+    def create_img(self) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], dict[str, Float[Arr, "n_pixels 2"]]]:
         # Get our starting position & direction (posn is random, direction is pointing inwards)
         start_coords = (0.1 + 0.8 * np.random.rand(2)) * np.array([self.target.y, self.target.x])
         start_coords_offset = start_coords - np.array([self.target.y, self.target.x]) / 2
@@ -374,9 +389,11 @@ class Drawing:
                 continue
 
             image = self.target.image_dict[color]
-            all_coords[color] = []
-            all_params[color] = []
-            pbar = tqdm.tqdm(range(n_shapes), desc=f"Drawing {color}")
+
+            color_string = get_color_string(color)
+            all_coords[color_string] = []
+            all_params[color_string] = []
+            pbar = tqdm.tqdm(range(n_shapes), desc=f"Drawing {color_string}")
 
             for step in pbar:
                 # Get our random parameterized shapes
@@ -386,7 +403,8 @@ class Drawing:
                     start_coords=start_coords,
                     canvas_y=self.target.y,
                     canvas_x=self.target.x,
-                    max_out_of_bounds=self.max_out_of_bounds
+                    outer_bound=self.outer_bound,
+                    inner_bound=self.inner_bound,
                 )
 
                 # Turn them into integer pixels, and concat them
@@ -417,8 +435,8 @@ class Drawing:
                 # Subtract it from the target image, and write it to the canvas
                 best_pixels = best_coords.astype(np.int32)
                 image[best_pixels[0], best_pixels[1]] -= darkness
-                all_params[color].append(best_params)
-                all_coords[color].append(best_coords_uncropped)
+                all_params[color_string].append(best_params)
+                all_coords[color_string].append(best_coords_uncropped)
 
                 # This end dir is the new start dir (same for position)
                 start_dir = best_end_dir
@@ -427,32 +445,54 @@ class Drawing:
         # Create canvas and draw on it
         canvas = Image.new("RGB", (self.target.output_x, self.target.output_y), (255, 255, 255))
         draw = ImageDraw.Draw(canvas)
-        for color, coords in all_coords.items():
-            all_coords[color] = np.concatenate(coords, axis=1).T  # shape (n_pixels, 2)
-            coords = (self.target.output_sf * all_coords[color]).tolist()
+        for color_string, coords in all_coords.items():
+            all_coords[color_string] = np.concatenate(coords, axis=1).T  # shape (n_pixels, 2)
+            coords = (self.target.output_sf * all_coords[color_string]).tolist()
             for (y0, x0), (y1, x1) in zip(coords[:-1], coords[1:]):
-                draw.line([(x0, y0), (x1, y1)], fill=color, width=1)
+                draw.line([(x0, y0), (x1, y1)], fill=color_string, width=1)
 
         return all_params, canvas, image, all_coords
 
+
+def get_color_string(color: tuple[int, int, int]):
+    if color == (0, 0, 0):
+        return "black"
+    elif color == (255, 255, 255):
+        return "white"
+    elif color == (255, 0, 0):
+        return "red"
+    else:
+        raise NotImplementedError()
 
 def mask_coords(
     coords: Float[Arr, "2 n_pixels"],
     max_y: int,
     max_x: int,
+    outer_bound: float | None,
+    inner_bound: float | None,
     remove: bool = False,
-    max_out_of_bounds: int | None = None,
 ) -> Float[Arr, "2 n_pixels"]:
     """Masks coordinates that go out of bounds."""
     assert coords.shape[0] == 2, "Coords should have shape (2, n_pixels)"
 
-    # Return empty array if any pixels are beyond max out of bounds
-    if max_out_of_bounds is not None:
-        if (
-            np.max([-coords[0].min(), coords[0].max() - max_y, -coords[1].min(), coords[1].max() - max_x])
-            > max_out_of_bounds
-        ):
-            return coords[:, :0]  # return empty array
+    # Return empty array if either (1) ANY pixels are too far out of bounds or (2) we END too close to an edge
+    max_out_of_bounds = np.max([
+        -coords[0].min() / max_y,
+        (coords[0].max() - max_y) / max_y,
+        -coords[1].min() / max_x,
+        (coords[1].max() - max_x) / max_x
+    ])
+    if max_out_of_bounds > outer_bound:
+        return coords[:, :0]
+    
+    end_out_of_bounds = np.max([
+        -coords[0, -1] / max_y,
+        (coords[0, -1] - max_y) / max_y,
+        -coords[1, -1] / max_x,
+        (coords[1, -1] - max_x) / max_x
+    ])
+    if end_out_of_bounds > -inner_bound:
+        return coords[:, :0]
 
     # Remove all out of bounds coordinates
     out_of_bounds = (coords[0] < 0) | (coords[0] >= max_y) | (coords[1] < 0) | (coords[1] >= max_x)
@@ -582,33 +622,45 @@ def FS_dither_batch(
     return image_dithered.astype(np.int32)
 
 
+def _get_min_max_coords(coords: dict[Any, Float[Arr, "2 n_pixels"]]) -> tuple[float, float, float, float]:
+    min_x = min(coords[:, 0].min() for coords in coords.values())
+    min_y = min(coords[:, 1].min() for coords in coords.values())
+    max_x = max(coords[:, 0].max() for coords in coords.values())
+    max_y = max(coords[:, 1].max() for coords in coords.values())
+    return min_x, min_y, max_x, max_y
+
+
 def make_gcode(
     all_coords: dict[tuple[int, int, int], Int[Arr, "n_coords 2"]],
     center: tuple[float, float],
     radius: tuple[float, float],
     speed: int = 10_000,
+    larger_dim_is_x=True, # changes how we scale (if larger dim doesn't match what's given here, then we transpose coordinates)
+    bound_by_largest_dim=False, # changes how we scale (if false, then we set the smallest dim to be radius, not the largest dim)
 ) -> dict[tuple[int, int, int], list[str]]:
-    # Normalize coordinates. We shrink them the minimum possible amount to fit
-    # in the circle (or in reality the square) with the given center and radius.
 
-    min_x = min(coords[:, 0].min() for coords in all_coords.values())
-    min_y = min(coords[:, 1].min() for coords in all_coords.values())
-    max_x = max(coords[:, 0].max() for coords in all_coords.values())
-    max_y = max(coords[:, 1].max() for coords in all_coords.values())
-    max_range = max(max_x - min_x, max_y - min_y)
+    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
+
+    # Transpose coords if necessary
+    if larger_dim_is_x ^ (max_x - min_x > max_y - min_y):
+        all_coords = {color: coords[:, ::-1] for color, coords in all_coords.items()}
+        min_x, min_y, max_x, max_y = min_y, min_x, max_y, max_x
+
+    # Get values for centering & scaling coordinates
     mid_x = (min_x + max_x) / 2
     mid_y = (min_y + max_y) / 2
+    max_range = 1e-6 + (max if bound_by_largest_dim else min)(max_x - min_x, max_y - min_y)
 
+    # Normalize coords
     for color, coords in all_coords.items():
         coords[:, 0] = (coords[:, 0] - mid_x) / (0.5 * max_range)  # normalize x to [-1, 1]
         coords[:, 1] = (coords[:, 1] - mid_y) / (0.5 * max_range)  # normalize y to [-1, 1]
+        # assert np.abs(coords).max() <= 1.0
         coords[:, 0] = coords[:, 0] * radius[0] + center[0]  # scale x to [center-radius, center+radius]
         coords[:, 1] = coords[:, 1] * radius[1] + center[1]  # scale y to [center-radius, center+radius]
+        all_coords[color] = coords
 
-    min_x = min(coords[:, 0].min() for coords in all_coords.values())
-    min_y = min(coords[:, 1].min() for coords in all_coords.values())
-    max_x = max(coords[:, 0].max() for coords in all_coords.values())
-    max_y = max(coords[:, 1].max() for coords in all_coords.values())
+    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
     print(f"Bounding box: X[{min_x:.3f}, {max_x:.3f}], Y[{min_y:.3f}, {max_y:.3f}]")
 
     lines = {}
