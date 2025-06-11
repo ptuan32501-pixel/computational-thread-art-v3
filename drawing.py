@@ -3,13 +3,16 @@ import math
 import pprint
 import time
 from calendar import c
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import einops
+import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
 import tqdm
+from IPython.display import display
 from jaxtyping import Float, Int
 from PIL import Image, ImageDraw
 
@@ -325,6 +328,12 @@ class TargetImage:
             if self.blur_rad is not None:
                 self.image_dict = {color: blur_image(img, self.blur_rad) for color, img in self.image_dict.items()}
 
+            nonwhite_density_sum = sum(
+                [img.sum() for color, img in self.image_dict.items() if color != (255, 255, 255)]
+            )
+            for color, img in self.image_dict.items():
+                print(f"{get_color_string(color)}, density = {img.sum() / nonwhite_density_sum:.4f}")
+
         # Display the dithered image
         if self.display_dithered:
             background_colors = [
@@ -461,14 +470,19 @@ class Drawing:
 
 
 def get_color_string(color: tuple[int, int, int]):
-    if color == (0, 0, 0):
-        return "black"
-    elif color == (255, 255, 255):
-        return "white"
-    elif color == (255, 0, 0):
-        return "red"
-    else:
-        raise NotImplementedError()
+    color_string = {
+        (0, 0, 0): "black",
+        (0, 215, 225): "aqua",
+        (0, 120, 240): "dodgerblue",
+        (0, 0, 128): "darkblue",
+        (255, 255, 255): "white",
+        (255, 0, 0): "red",
+    }.get(color, None)
+
+    if color_string is None:
+        raise ValueError(f"Color {color} not found in color string")
+
+    return color_string
 
 
 def mask_coords(
@@ -643,43 +657,115 @@ def _get_min_max_coords(coords: dict[Any, Float[Arr, "2 n_pixels"]]) -> tuple[fl
 
 def make_gcode(
     all_coords: dict[tuple[int, int, int], Int[Arr, "n_coords 2"]],
-    center: tuple[float, float],
-    radius: tuple[float, float],
+    bounding_box: tuple[tuple[float, float], tuple[float, float]],
+    padding: float = 0.0,
+    tiling: tuple[int, int] = (1, 1),
     speed: int = 10_000,
-    larger_dim_is_x=True,  # changes how we scale (if larger dim doesn't match what's given here, then we transpose coordinates)
-    bound_by_largest_dim=False,  # changes how we scale (if false, then we set the smallest dim to be radius, not the largest dim)
+    end_coords: tuple[float, float] | None = None,
+    plot_gcode: bool = False,
+    rotate: bool = False,
+) -> dict[tuple[int, int, int], list[str]]:
+    """
+    Generates G-code for multiple different copies of the image.
+    """
+    gcode_all = defaultdict(list)
+    times_all = defaultdict(list)
+    normalized_coords_all = defaultdict(list)
+    first_last_moves_all = defaultdict(list)
+
+    if rotate:
+        for color, coords in all_coords.items():
+            all_coords[color] = np.array([coords[:, 1], -coords[:, 0]]).T
+
+    (x0, y0), (x1, y1) = bounding_box
+
+    for x_iter in range(tiling[0]):
+        for y_iter in range(tiling[1]):
+            print(f"Computing tile {x_iter}, {y_iter}")
+            _x0 = x0 + (x1 - x0) * x_iter / tiling[0]
+            _y0 = y0 + (y1 - y0) * y_iter / tiling[1]
+            _x1 = x0 + (x1 - x0) * (x_iter + 1) / tiling[0]
+            _y1 = y0 + (y1 - y0) * (y_iter + 1) / tiling[1]
+            _bounding_box = ((_x0 + padding, _y0 + padding), (_x1 - padding, _y1 - padding))
+
+            gcode, times, normalized_coords = make_gcode_single(
+                all_coords,
+                bounding_box=_bounding_box,
+                speed=speed,
+                end_coords=end_coords,
+            )
+            for k, v in gcode.items():
+                gcode_all[k].extend(v)
+                first_last_moves_all[k].append((v[0], v[-2]))
+            for k, v in times.items():
+                times_all[k].append(v)
+            for k, v in normalized_coords.items():
+                normalized_coords_all[k].append(v.tolist())
+
+    print()
+    for color, times in times_all.items():
+        print(f"Color {color}...")
+        print(f"  ...time = sum({', '.join(f'{t:.2f}' for t in times)}) = {sum(times):.2f} minutes")
+        print("  ...first/last moves:")
+        for first_move, last_move in first_last_moves_all[color]:
+            print(f"    {first_move} ... {last_move}")
+
+    if plot_gcode:
+        output_size = 1000
+        ((x0, y0), (x1, y1)) = bounding_box
+        sf = output_size / (x1 - x0)
+        for color, lines in normalized_coords_all.items():
+            lines = np.concatenate(lines, axis=0)
+            canvas = Image.new(
+                "RGB",
+                (output_size, int(output_size * (y1 - y0) / (x1 - x0))),
+                (255, 255, 255),
+            )
+            draw = ImageDraw.Draw(canvas)
+            points = list(zip(sf * (lines[:, 0] - x0), sf * (lines[:, 1] - y0)))
+            draw.line(points, fill=color if color != "bounding_box" else "black", width=1)
+            display(canvas)
+
+    return gcode_all
+
+
+def make_gcode_single(
+    all_coords: dict[tuple[int, int, int], Int[Arr, "n_coords 2"]],
+    bounding_box: tuple[tuple[float, float], tuple[float, float]],
+    speed: int = 10_000,
     end_coords: tuple[float, float] | None = None,
 ) -> dict[tuple[int, int, int], list[str]]:
+    eps = 1e-3
+
+    (x0, y0), (x1, y1) = bounding_box
+
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
 
-    # Transpose coords if necessary
-    if larger_dim_is_x ^ (max_x - min_x > max_y - min_y):
-        all_coords = {
-            color: np.stack([coords[:, 1], min_y + max_y - coords[:, 0]], axis=-1) for color, coords in all_coords.items()
-        }
-        min_x, min_y, max_x, max_y = min_y, min_x, max_y, max_x
+    # Figure out what the max amount is we can scale, while still fitting in bounding box
+    sf = min((x1 - x0) / (max_x - min_x), (y1 - y0) / (max_y - min_y))
 
-    # Get values for centering & scaling coordinates
-    mid_x = (min_x + max_x) / 2
-    mid_y = (min_y + max_y) / 2
-    max_range = 1e-6 + (max if bound_by_largest_dim else min)(max_x - min_x, max_y - min_y)
-
-    # Normalize coords
+    # Scale coords to bounding box range
     all_coords_normalized = {}
     for color, coords in all_coords.items():
-        coords[:, 0] = (coords[:, 0] - mid_x) / (0.5 * max_range)  # normalize x to [-1, 1]
-        coords[:, 1] = (coords[:, 1] - mid_y) / (0.5 * max_range)  # normalize y to [-1, 1]
-        # assert np.abs(coords).max() <= 1.0
-        coords[:, 0] = coords[:, 0] * radius[0] + center[0]  # scale x to [center-radius, center+radius]
-        coords[:, 1] = coords[:, 1] * radius[1] + center[1]  # scale y to [center-radius, center+radius]
+        # Normalize coords to fit bounding box
+        coords[:, 0] = x0 + (coords[:, 0] - min_x) * sf
+        coords[:, 1] = y0 + (coords[:, 1] - min_y) * sf
+        assert coords[:, 0].min() >= x0 - eps and coords[:, 0].max() <= x1 + eps
+        assert coords[:, 1].min() >= y0 - eps and coords[:, 1].max() <= y1 + eps
         all_coords_normalized[color] = coords
 
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_normalized)
-    print("Bounding box:")
-    for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
-        print(f"G1 X{x:.3f} Y{y:.3f} F5000")
+    all_coords_normalized["bounding_box"] = np.array(
+        [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]]
+    )
+    print(f"  Bounding box: [{min_x:.3f}-{max_x:.3f}, {min_y:.3f}-{max_y:.3f}]")
 
     lines = {}
+    times = {}
+
+    lines["bounding_box"] = ["M3S250 ; raise"]
+    for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
+        lines["bounding_box"].append(f"G1 X{x:.3f} Y{y:.3f} F5000")
 
     for color, coords_list in all_coords_normalized.items():
         lines[color] = ["M3S250 ; raise at the start"]
@@ -697,14 +783,14 @@ def make_gcode(
             lines[color].append(f"G1 X{end_coords[0]:.3f} Y{end_coords[1]:.3f} ; end position")
 
         # Print total time this will take
-        diffs = all_coords[color][1:] - all_coords[color][:-1]
+        diffs = all_coords_normalized[color][1:] - all_coords_normalized[color][:-1]
         distances = (diffs**2).sum(-1) ** 0.5
         distance_for_one_minute = 2025
-        print(f"Color {color} will take {distances.sum() / distance_for_one_minute:.2f} minutes")
+        times[color] = distances.sum() / distance_for_one_minute
 
     # print("\n".join(lines[:20]))
     # pyperclip.copy("\n".join(lines[50_000:]))
-    return lines
+    return lines, times, all_coords_normalized
 
 
 # ! Demo code (ignore everything below this line)
