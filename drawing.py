@@ -655,7 +655,7 @@ def make_gcode(
     # Transpose coords if necessary
     if larger_dim_is_x ^ (max_x - min_x > max_y - min_y):
         all_coords = {
-            color: np.stack([coords[1], min_y + max_y - coords[0]], axis=-1) for color, coords in all_coords.items()
+            color: np.stack([coords[:, 1], min_y + max_y - coords[:, 0]], axis=-1) for color, coords in all_coords.items()
         }
         min_x, min_y, max_x, max_y = min_y, min_x, max_y, max_x
 
