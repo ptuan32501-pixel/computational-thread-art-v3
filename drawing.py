@@ -711,16 +711,14 @@ def make_gcode(
             print(f"    {first_move} ... {last_move}")
 
     if plot_gcode:
-        output_size = 1000
+        output_area = 500 * 500
+        output_x = (output_area * (x1 - x0) / (y1 - y0)) ** 0.5
+        output_y = (output_area * (y1 - y0) / (x1 - x0)) ** 0.5
         ((x0, y0), (x1, y1)) = bounding_box
-        sf = output_size / (x1 - x0)
+        sf = output_x / (x1 - x0)
         for color, lines in normalized_coords_all.items():
             lines = np.concatenate(lines, axis=0)
-            canvas = Image.new(
-                "RGB",
-                (output_size, int(output_size * (y1 - y0) / (x1 - x0))),
-                (255, 255, 255),
-            )
+            canvas = Image.new("RGB", (int(output_x), int(output_y)), (255, 255, 255))
             draw = ImageDraw.Draw(canvas)
             points = list(zip(sf * (lines[:, 0] - x0), sf * (lines[:, 1] - y0)))
             draw.line(points, fill=color if color != "bounding_box" else "black", width=1)
