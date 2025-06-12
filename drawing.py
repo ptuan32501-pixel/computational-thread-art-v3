@@ -395,7 +395,7 @@ class Drawing:
     # If we supply crop distance, it means that (not including the lines we might draw at the start and the
     # end to get to the borders) we'll crop the image so that all empty space further than this far away from
     # the pixels are removed.
-    crop_distance: int | None = None
+    crop_distance: int | None 
 
     def __post_init__(self):
         if self.outer_bound is not None:
@@ -983,7 +983,7 @@ def make_gcode_single(
             y=coords_list[0, 1],
             side=2 if color == "bounding_box" else start_end_sides[color]["start"],
         )[::-1]
-        lines[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in start_xy_seq])
+        lines[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for x, y in start_xy_seq])
 
         # Add all the drawing coordinates
         x = y = None
@@ -998,8 +998,8 @@ def make_gcode_single(
             y=coords_list[-1, 1],
             side=2 if color == "bounding_box" else start_end_sides[color]["end"],
         )
-        lines[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in end_xy_seq])
         lines[color].append("M3S250 ; raise (finished drawing)")
+        lines[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for x, y in end_xy_seq])
 
         # Update normalized coords to reflect the journey to & from the origin
         all_coords_normalized[color] = np.concatenate([np.array(start_xy_seq), coords_list, np.array(end_xy_seq)])
@@ -1008,7 +1008,7 @@ def make_gcode_single(
         distances = np.linalg.norm(np.diff(coords_list, axis=0), axis=1)
         # diffs = coords_list[1:] - coords_list[:-1]
         # distances = (diffs**2).sum(-1) ** 0.5
-        distance_for_one_minute = 1611
+        distance_for_one_minute = 1303 # 1611
         times[color] = distances.sum() / distance_for_one_minute
 
     # print("\n".join(lines[:20]))
