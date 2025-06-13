@@ -90,6 +90,8 @@ class ThreadArtColorParams:
     # drawn pieces.
     image: Image.Image | None = None
     # ^ for streamlit page, passing through uploaded image not filename
+    palette_substitution: list[tuple[int, int, int]] | None = None
+    # ^ only used when we supply lists of monochrome images to `filename`, e.g. Bowie
 
     @classmethod
     def from_dict(cls, args_dict: dict) -> "ThreadArtColorParams":
@@ -111,9 +113,10 @@ class ThreadArtColorParams:
     def __post_init__(self):
         t0 = time.time()
 
-        # Load in real image, also gets us the width and height
+        # Load in real image, to get the width and height
         if self.image is None:
-            self.image = Image.open(str(ROOT_PATH / "images" / self.filename))
+            filename = self.filename if isinstance(self.filename, str) else self.filename[0]
+            self.image = Image.open(str(ROOT_PATH / "images" / filename))
         self.y = int(self.x * (self.image.height / self.image.width))
 
         if self.shape.lower() in ["circle", "ellipse", "round"]:
