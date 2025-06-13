@@ -266,7 +266,7 @@ class Shape:
 
 @dataclass
 class TargetImage:
-    image_path: str
+    image_path: str | dict[tuple[int, int, int], str]
     weight_image_path: str | None
     palette: list[tuple[int, int, int]]
     x: int
@@ -278,8 +278,17 @@ class TargetImage:
         # Check colors are valid (raise error if not)
         _ = [get_color_string(color) for color in self.palette]
 
-        # Load in image
-        image = Image.open(self.image_path).convert("L" if len(self.palette) == 1 else "RGB")
+        # Load in image (either a single image which we'll dither, or a dict of images for each colour)
+        if isinstance(self.image_path, str):
+            image = Image.open(self.image_path).convert("L" if len(self.palette) == 1 else "RGB")
+            width, height = image.size
+        else:
+            image = {
+                color: Image.open(img_path).convert("L" if len(self.palette) == 1 else "RGB")
+                for color, img_path in self.image_path.items()
+            }
+            assert len(set(i.size for i in image.values())) == 1, "All images must have the same size"
+            width, height = image.values()[0].size
 
         # Optionally load in (and turn to an array) the weight image
         self.weight_image = None
@@ -288,16 +297,28 @@ class TargetImage:
             self.weight_image = np.asarray(weight_image.resize((self.x, self.y))).astype(np.float32) / 255
 
         # Get dimensions (for target and output images)
-        width, height = image.size
         self.y = int(self.x * height / width)
         self.output_sf = self.output_x / self.x
 
         # Optionally perform dithering, and get `self.image_dict` for use in `Drawing`
-        image_arr = np.asarray(image.resize((self.x, self.y)))
         if len(self.palette) == 1:
+            # Case 1: basic monochrome image (only black lines)
+            assert isinstance(image, Image.Image), "Image must be a single image if there is only one color"
+            image_arr = np.asarray(image.resize((self.x, self.y)))
             self.image_dict = {self.palette[0]: 1.0 - image_arr.astype(np.float32) / 255}
+        elif isinstance(image, dict):
+            # Case 2: multiple images (one per color), e.g. Bowie
+            self.image_dict = {
+                color: np.asarray(color_img.resize((self.x, self.y))).astype(np.float32) / 255
+                for color, color_img in image.items()
+            }
+            density_sum = sum([img.sum() for img in self.image_dict.values()])
+            for color, img in self.image_dict.items():
+                print(f"{get_color_string(color)}, density = {img.sum() / density_sum:.4f}")
         else:
+            # Case 3: single color image, to be dithered
             assert (255, 255, 255) not in self.palette, "White should not be in palette"
+            image_arr = np.asarray(image.resize((self.x, self.y)))
             image_dithered = FS_dither(image_arr, [(255, 255, 255)] + self.palette)
             self.image_dict = {
                 color: (get_img_hash(image_dithered) == get_color_hash(np.array(color))).astype(np.float32)
@@ -312,7 +333,7 @@ class TargetImage:
             for color, img in self.image_dict.items():
                 print(f"{get_color_string(color)}, density = {img.sum() / nonwhite_density_sum:.4f}")
 
-        # Display the dithered image
+        # Display the images for each color (again we split based on whether the input was a string or dictionary)
         if self.display_dithered:
             background_colors = [
                 np.array([255, 255, 255]) if sum(color) < 255 + 160 else np.array([0, 0, 0]) for color in self.palette
@@ -919,6 +940,7 @@ def make_gcode_single(
     """
     Creates G-code for a single tile image. This gets concatenated for multiple tiles.
     """
+
     all_coords = {k: v.copy() for k, v in all_coords.items()}
 
     # Figure out which side each color starts and ends on
@@ -933,12 +955,13 @@ def make_gcode_single(
             )
             start_end_sides[color][side_type] = border % 4
 
-    xmin, ymin, xmax, ymax = _get_min_max_coords(all_coords)
+    # Print out the bounding box (in original coordinates), to get a sanity check on how much of the space we're using.
+    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
     print(
         f"  Bounding box (orig, outer):  [{0.0:.3f}-{image_bounding_box[0]:.3f}, {0.0:.3f}-{image_bounding_box[1]:.3f}], AR = {(image_bounding_box[1]) / image_bounding_box[0]:.3f}"
     )
     print(
-        f"  Bounding box (orig, inner):  [{xmin:.3f}-{xmax:.3f}, {ymin:.3f}-{ymax:.3f}], AR = {(ymax - ymin) / (xmax - xmin):.3f}"
+        f"  Bounding box (orig, inner):  [{min_x:.3f}-{max_x:.3f}, {min_y:.3f}-{max_y:.3f}], AR = {(max_y - min_y) / (max_x - min_x):.3f}"
     )
 
     # Rescale coordinates to fit within GCode bounding box (we scale as large as possible while staying inside it)
@@ -949,9 +972,11 @@ def make_gcode_single(
     # Print new bounding box, in GCode terms. The outer box is the one we sit inside, and the inner box is the one we
     # actually draw (so the inner box should be within the outer box, but touch it on 3/4 of the sides, otherwise
     # we're wasting space - we can't guarantee touching on all 4 sides cause this fucks with the aspect ratio).
+    # ! Important - rewrite this comment! Since now that's now how we do bounding boxes here.
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_gcode_scale)
     all_coords_gcode_scale["bounding_box"] = np.array(
-        [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]]
+        # [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]]
+        [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
     )
     print(f"  Bounding box (outer): [{x0:06.2f}-{x1:06.2f}, {y0:06.2f}-{y1:06.2f}], AR = {(y1 - y0) / (x1 - x0):.3f}")
     print(
@@ -964,7 +989,8 @@ def make_gcode_single(
 
     # Fill in bounding box lines, i.e. just moving around the corners of the bounding box
     gcode["bounding_box"] = ["M3S250 ; raise"]
-    for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
+    # for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
+    for x, y in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]:
         gcode["bounding_box"].append(f"G1 X{x:.3f} Y{y:.3f} F5000")
 
     # For all colors, update the gcode movements so that they follow this pattern:
@@ -1011,7 +1037,7 @@ def make_gcode_single(
             (True, coords_list[border_start:border_end]),
             (False, np.concatenate([coords_list[border_end:], np.array(end_xy_seq)])),
         ]
-        print(color, border_start, border_end, border_lengths, len(coords_list))
+        # print(color, border_start, border_end, border_lengths, len(coords_list))
 
         # Print total time this will take
         coords_concatenated = np.concatenate([coords for _, coords in all_coords_gcode_scale[color]])
