@@ -1,4 +1,5 @@
 import enum
+import re
 import math
 import pprint
 import time
@@ -582,6 +583,7 @@ class Drawing:
         target_x: int,
         bounding_x: tuple[float, float] = (0.0, 1.0),
         bounding_y: tuple[float, float] = (0.0, 1.0),
+        fractions: float | dict[str, float] | None = None,
     ) -> tuple[Image.Image, dict[str, Float[Arr, "n_pixels 2"]]]:
         """
         Function which makes a canvas to display, and at the same time crops coordinates & gives us rescaled
@@ -602,6 +604,12 @@ class Drawing:
         canvas = Image.new("RGB", (int(output_size[1]), int(output_size[0])), (255, 255, 255))
         draw = ImageDraw.Draw(canvas)
         for color_string, coords in all_coords.items():
+
+            # Possibly crop the coordinates down to a subset of them
+            if fractions is not None:
+                fraction = fractions if isinstance(fractions, float) else fractions[color_string]
+                coords = coords[:int(len(coords) * fraction)].copy()
+
             # Crop the coordinates, so we only get ones that appear inside the bounding box
             coords_scaled_to_01 = coords / size
             coords_mask = (coords_scaled_to_01 >= bounding_min) & (coords_scaled_to_01 <= bounding_max)
@@ -667,9 +675,11 @@ def return_to_origin(
     x: float,
     y: float,
     side: int,  # 0 = right, moving anticlockwise
+    include_start: bool = True,
 ) -> list[tuple[float, float]]:
     """Returns a list of (y, x) tuples which traces a path back to the origin."""
-    return [(x, y), (x, 0) if side % 2 == 0 else (0, y), (0, 0)]
+    path = [(x, y), (x, 0) if side % 2 == 0 else (0, y), (0, 0)]
+    return path if include_start else path[1:]
 
 
 def mask_coords(
@@ -854,13 +864,14 @@ def make_gcode(
     speed: int = 10_000,
     plot_gcode: bool = False,
     rotate: bool = False,
+    pen_height: int = 450,
+    demo: bool = False, # turn this on and we only print the first 1000 lines, with all pen up & half speed
 ) -> dict[str, list[str]]:
     """
     Generates G-code for multiple different copies of the image.
     """
     gcode_all = defaultdict(list)
     times_all = defaultdict(list)
-    coords_gcode_scale_all = defaultdict(list)
 
     # We assume bounding box has been zeroed
     gcode_bounding_box = [(0.0, 0.0), gcode_bounding_box]
@@ -875,6 +886,9 @@ def make_gcode(
         for color, coords in all_coords.items():
             all_coords[color] = np.array([coords[:, 1], image_bounding_box[0] - coords[:, 0]]).T
         image_bounding_box = tuple(image_bounding_box)[::-1]
+    else:
+        for color, coords in all_coords.items():
+            all_coords[color] = np.array([coords[:, 0], image_bounding_box[1] - coords[:, 1]]).T
 
     # After the flipping and optional rotations, check our bounds are still valid
     all_coords_max = np.max(np.stack([v.max(axis=0) for v in all_coords.values()]), axis=0)
@@ -882,30 +896,33 @@ def make_gcode(
 
     for x_iter in range(tiling[0]):
         for y_iter in range(tiling[1]):
-            print(f"Computing tile {x_iter}, {y_iter}")
+            print(f"{x_iter}, {y_iter}")
             _x0 = x0 + (x1 - x0) * x_iter / tiling[0]
             _y0 = y0 + (y1 - y0) * y_iter / tiling[1]
             _x1 = x0 + (x1 - x0) * (x_iter + 1) / tiling[0]
             _y1 = y0 + (y1 - y0) * (y_iter + 1) / tiling[1]
             _bounding_box = ((_x0, _y0), (_x1 - margin, _y1 - margin))
 
-            gcode, times, coords_gcode_scale = make_gcode_single(
+            gcode, times = make_gcode_single(
                 all_coords,
                 image_bounding_box=image_bounding_box,
                 gcode_bounding_box=_bounding_box,
                 border_lengths=border_lengths,
                 speed=speed,
+                pen_height=pen_height,
             )
-            for k, v in gcode.items():
-                gcode_all[k].extend(v)
-            for k, v in times.items():
-                times_all[k].append(v)
-            for k, v in coords_gcode_scale.items():
-                coords_gcode_scale_all[k].extend(v)
+            for k in ["bounding_box"] + list(all_coords.keys()):
+                gcode_all[k].extend(gcode[k])
+                times_all[k].append(times[k])
 
     print()
     for color, times in times_all.items():
         print(f"{color:<13} ... time = sum({', '.join(f'{t:05.2f}' for t in times)}) = {sum(times):.2f} minutes")
+
+    if demo:
+        for color, gcode in gcode_all.items():
+            gcode_all[color] = gcode[:1000]
+            gcode_all[color] = [g.replace(f"F{speed}", f"F{int(speed/2)}") for g in gcode_all[color] if not g.startswith("M3S0")]
 
     if plot_gcode:
         output_area = 600 * 600
@@ -915,17 +932,19 @@ def make_gcode(
         sf = output_x / (x1 - x0)
         canvas_all = Image.new("RGB", (int(output_x), int(output_y)), (255, 255, 255))
         draw_all = ImageDraw.Draw(canvas_all)
-        for color, all_lines in coords_gcode_scale_all.items():
+        # for color, all_lines in coords_gcode_scale_all.items():
+        for color, gcode in gcode_all.items():
+            all_lines = _create_coords_from_gcode(gcode)
             canvas = Image.new("RGB", (int(output_x), int(output_y)), (255, 255, 255))
-            for pen_down, lines in all_lines:
+            for lines, pen_up in all_lines:
                 draw = ImageDraw.Draw(canvas)
                 points = list(zip(sf * (lines[:, 0] - x0), sf * (y1 - lines[:, 1])))
-                width = 1 if pen_down else 4
-                fill = "#aaa" if (color == "bounding_box" or not pen_down) else color
+                width = 4 if pen_up else 1
+                fill = "#aaa" if pen_up else "black" if color == "bounding_box" else color
                 draw.line(points, fill=fill, width=width)
                 draw_all.line(points, fill=fill, width=width)
-            display(canvas)  # ImageOps.expand(canvas, border=(1, 0, 0, 1), fill="white")
-        display(canvas_all)
+            display(ImageOps.expand(canvas, border=(3, 0, 0, 3), fill="white"))
+        display(ImageOps.expand(canvas_all, border=(3, 0, 0, 3), fill="white"))
 
     return gcode_all
 
@@ -936,6 +955,7 @@ def make_gcode_single(
     gcode_bounding_box: tuple[tuple[float, float], tuple[float, float]],
     border_lengths: dict[str, tuple[int, int]],
     speed: int = 10_000,
+    pen_height: int = 400,
 ) -> dict[tuple[int, int, int], list[str]]:
     """
     Creates G-code for a single tile image. This gets concatenated for multiple tiles.
@@ -969,13 +989,10 @@ def make_gcode_single(
     sf = min((x1 - x0) / image_bounding_box[0], (y1 - y0) / image_bounding_box[1])
     all_coords_gcode_scale = {color: np.array([x0, y0]) + coords * sf for color, coords in all_coords.items()}
 
-    # Print new bounding box, in GCode terms. The outer box is the one we sit inside, and the inner box is the one we
-    # actually draw (so the inner box should be within the outer box, but touch it on 3/4 of the sides, otherwise
-    # we're wasting space - we can't guarantee touching on all 4 sides cause this fucks with the aspect ratio).
-    # ! Important - rewrite this comment! Since now that's now how we do bounding boxes here.
+    # Print new bounding box, in GCode terms (note that we still use the originally provided gcode bounding box
+    # rather than cropping further, since we might want the empty space!).
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_gcode_scale)
     all_coords_gcode_scale["bounding_box"] = np.array(
-        # [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]]
         [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
     )
     print(f"  Bounding box (outer): [{x0:06.2f}-{x1:06.2f}, {y0:06.2f}-{y1:06.2f}], AR = {(y1 - y0) / (x1 - x0):.3f}")
@@ -991,7 +1008,7 @@ def make_gcode_single(
     gcode["bounding_box"] = ["M3S250 ; raise"]
     # for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
     for x, y in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]:
-        gcode["bounding_box"].append(f"G1 X{x:.3f} Y{y:.3f} F5000")
+        gcode["bounding_box"].append(f"G1 X{x:.3f} Y{y:.3f} F{speed}")
 
     # For all colors, update the gcode movements so that they follow this pattern:
     #   (1) Raise pen
@@ -1005,30 +1022,38 @@ def make_gcode_single(
         border_end = len(coords_list) - 1 - border_end
 
         # (1, 2) Raise pen & move to starting position
-        gcode[color] = ["M3S250 ; raise (before moving to starting position)"]
+        gcode[color] = [f"M3S{pen_height} ; raise (before moving to starting position)"]
         start_xy_seq = return_to_origin(
             x=coords_list[0, 0],
             y=coords_list[0, 1],
             side=2 if color == "bounding_box" else start_end_sides[color]["start"],
+            include_start=False,
         )[::-1]
-        gcode[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in start_xy_seq])
+        gcode[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for x, y in start_xy_seq])
 
         # (4) Add all the drawing coordinates (this includes step 3 & 5, lowering & raising)
         x = y = None
         for i, (x, y) in enumerate(coords_list):
+            gcode[color].append(f"G1 X{x:.3f} Y{y:.3f} F{speed}")
             if i == border_start:
                 gcode[color].append("M3S0 ; lower (to start drawing)")
-            gcode[color].append(f"G1 X{x:.3f} Y{y:.3f} F{speed if i > 0 else 5000}")
-            if i == border_end:
-                gcode[color].append("M3S250 ; raise (to end drawing)")
+            elif i == border_end:
+                gcode[color].append(f"M3S{pen_height} ; raise (to end drawing)")
 
         # (6) End the drawing by moving back to the origin
         end_xy_seq = return_to_origin(
             x=coords_list[-1, 0],
             y=coords_list[-1, 1],
             side=2 if color == "bounding_box" else start_end_sides[color]["end"],
+            include_start=False,
         )
-        gcode[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in end_xy_seq])
+        gcode[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for x, y in end_xy_seq])
+
+        # Filter GCode to remove any duplicates which are adjacent to each other
+        duplicate_indices = set([i for i, (g0, g1) in enumerate(zip(gcode[color][:-1], gcode[color][1:])) if g0 == g1])
+        if duplicate_indices:
+            gcode[color] = [g for i, g in enumerate(gcode[color]) if i not in duplicate_indices]
+
 
         # Update normalized coords to reflect the journey to & from the origin (including whether some of the
         # start and end coords were actually pen-up)
@@ -1045,4 +1070,28 @@ def make_gcode_single(
         distance_for_one_minute = 1400  # TODO - improve this estimate
         times[color] = distances.sum() / distance_for_one_minute
 
-    return gcode, times, all_coords_gcode_scale
+    return gcode, times
+
+
+
+def _create_coords_from_gcode(gcode: list[str]) -> list[tuple[Float[Arr, "length 2"], bool]]:
+    """Creates list of coords (and whether pen is up/down) from GCode. Good for sanity checking!"""
+
+    assert gcode[0].startswith("M3S"), "GCode should always start with raise/lower op, to be sure!"
+
+    coords, segments, pen_up = [], [], True
+    
+    for cmd in gcode:
+        if cmd.startswith('M3S'):
+            if coords:
+                segments.append((np.array(coords), pen_up))
+                coords = [coords[-1]] if coords else []
+            pen_up = not cmd.startswith('M3S0')
+        elif cmd.startswith('G1'):
+            x, y = re.findall(r'X([\d.-]+) Y([\d.-]+)', cmd)[0]
+            coords.append([float(x), float(y)])
+    
+    if coords:
+        segments.append((np.array(coords), pen_up))
+    
+    return segments
