@@ -2,10 +2,9 @@ import enum
 import math
 import pprint
 import time
-from calendar import c
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 import einops
 import matplotlib.pyplot as plt
@@ -14,7 +13,7 @@ import plotly.express as px
 import tqdm
 from IPython.display import display
 from jaxtyping import Float, Int
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from image_color import blur_image
 from misc import get_color_hash, get_img_hash
@@ -24,7 +23,6 @@ Arr = np.ndarray
 
 class LineType(enum.Enum):
     STRAIGHT = enum.auto()
-    ARC = enum.auto()
     BEZIER = enum.auto()
 
 
@@ -101,16 +99,9 @@ class Shape:
                 radius *= canvas_length
                 end_coords_delta = radius * np.array([np.sin(end_angle), np.cos(end_angle)])
                 end_coords = start_coords + end_coords_delta
-                # Make sure it doesn't go off the edge by more than 1 pixel
-                # end_coords = np.clip(end_coords, a_min=0, a_max=canvas_length)
 
             if self.line_type == LineType.STRAIGHT:
                 return {"end_coords": end_coords}
-            elif self.line_type == LineType.ARC:
-                return {
-                    "end_coords": end_coords,
-                    "angle_delta": angle_delta,  # Not needed, just useful for getting end direction
-                }
             elif self.line_type == LineType.BEZIER:
                 end_angle_direction = end_angle + np.random.uniform(*self.bezier_end_angle_range)
                 return {
@@ -152,7 +143,7 @@ class Shape:
             - coords_uncropped: (2, n_pixels) without cropping at sides (useful for final drawing)
             - pixels: (2, n_pixels) array of integer (y, x) coordinates for the shape
         """
-        canvas_length = min(canvas_x, canvas_y)
+        canvas_length = max(canvas_x, canvas_y)
 
         if self.line_type is None:
             raise NotImplementedError("Only doing lines for now (take commented code at the end)")
@@ -212,8 +203,6 @@ class Shape:
             pixels: (2, num_pixels) array of integer (y, x) coordinates
             final_dir: (2,) array with final normalized (y, x) direction
         """
-        assert self.line_type in [LineType.STRAIGHT, LineType.ARC, LineType.BEZIER]
-
         # We start by getting 3 things:
         # - Length of curve
         # - Final direction
@@ -226,39 +215,6 @@ class Shape:
 
             interpolate = lambda t: start_coords[:, None] + t * (end_coords - start_coords)[:, None]
             final_dir = start_dir
-
-        elif self.line_type == LineType.ARC:
-            assert set(kwargs.keys()) == {"angle_delta"}
-
-            raise NotImplementedError("Haven't fixed bugs in this yet.")
-
-            # Get center of circle, by moving radially inwards from `start_coords`
-            chord = end_coords - start_coords
-            perp = np.array([-start_dir[1], start_dir[0]])
-            radius = np.linalg.norm(chord) ** 2 / (2 * np.abs(np.dot(chord, perp)))
-            center = start_coords + radius * perp
-
-            # Use this to figure out the (signed) angle of the arc we're making around this circle
-            start_vec = start_coords - center
-            end_vec = end_coords - center
-            start_radial_angle = np.arctan2(*start_vec)
-            end_radial_angle = np.arctan2(*end_vec)
-            delta_radial_angle = (end_radial_angle - start_radial_angle) % (2 * np.pi)
-            if delta_radial_angle > np.pi:
-                delta_radial_angle -= 2 * np.pi  # convert to clockwise if this makes a shorter trip around
-            assert -np.pi <= delta_radial_angle <= np.pi, "Angle delta is out of bounds"
-
-            # Use angle & radius to get interpolation function
-            interpolate = lambda t: center[:, None] + radius * np.array(
-                [
-                    np.sin(start_radial_angle + t * delta_radial_angle),
-                    np.cos(start_radial_angle + t * delta_radial_angle),
-                ]
-            )
-
-            final_angle = np.arctan2(*start_dir) + delta_radial_angle
-            final_dir = np.array([np.cos(final_angle), np.sin(final_angle)])
-            line_length = np.abs(kwargs["angle_delta"]) * radius
 
         elif self.line_type == LineType.BEZIER:
             assert set(kwargs.keys()) == {"start_strength", "end_strength", "end_dir"}
@@ -275,8 +231,8 @@ class Shape:
             # Control points
             p0 = np.array(start_coords)
             p1 = np.array(start_coords) + start_strength * chord_length * start_dir
-            p3 = np.array(end_coords)
             p2 = np.array(end_coords) - end_strength * chord_length * end_dir
+            p3 = np.array(end_coords)
 
             # Estimate curve length and steps: avg of direct path and control points piecewise linear path
             chord_length = np.linalg.norm(p3 - p0)
@@ -292,7 +248,11 @@ class Shape:
             )
             final_dir = np.array(end_dir)
 
-        # We get coords by interpolating along the curve, a certain number of steps
+        else:
+            raise ValueError(f"Invalid line type: {self.line_type}")
+
+        # Using the interpolation function, we get coords for each step along the curve (using
+        # line length to determine the number of steps we interpolate along)
         num_steps = 1 + max(1, int(line_length))
         coords = interpolate(np.linspace(0, 1, num_steps, endpoint=True))
 
@@ -302,9 +262,6 @@ class Shape:
         final_dir = final_dir / np.linalg.norm(final_dir)
 
         return coords, pixels, final_dir
-
-
-# TODO - allow this code to be re-used? (it's mostly copy-pased from `image_color.py`)
 
 
 @dataclass
@@ -392,21 +349,19 @@ class Drawing:
     outer_bound: float | None
     inner_bound: float | None
 
-    # If we supply crop distance, it means that (not including the lines we might draw at the start and the
-    # end to get to the borders) we'll crop the image so that all empty space further than this far away from
-    # the pixels are removed.
-    crop_distance: int | None = None
+    # If we use zoom fractions, then we zoom the image out before optionally appending our final lines
+    zoom_fractions: tuple[float, float] | None = None
 
     def __post_init__(self):
         if self.outer_bound is not None:
-            assert self.outer_bound > 0, "Outer bound must be positive"
+            assert self.outer_bound >= 0, "Outer bound must be non-negative"
             assert self.inner_bound is not None and self.inner_bound > 0, (
                 "Inner bound must be supplied if outer bound is"
             )
 
     def create_img(
         self, seed: int = 0, use_borders: bool = False
-    ) -> tuple[list[dict], Image.Image, Int[Arr, "y x"], dict[str, Float[Arr, "n_pixels 2"]]]:
+    ) -> tuple[Image.Image, dict[str, Float[Arr, "n_pixels 2"]], tuple[int, int]]:
         np.random.seed(seed)
 
         # If any parameters were given as a single number, convert them to lists
@@ -479,41 +434,39 @@ class Drawing:
                 "end_dir": current_dir,
             }
 
-        # Now we have all the normal shapes for all colours, we can crop the image if we want
-        if self.crop_distance is None:
+        # If using zoom fractions, then zoom out now (updating target x and y accordingly)
+        if self.zoom_fractions is not None:
+            zoom_pixels_y = int(self.target.y * self.zoom_fractions[0])
+            zoom_pixels_x = int(self.target.x * self.zoom_fractions[1])
+            for color in self.target.palette:
+                color_string = get_color_string(color)
+                # Offset coords
+                all_coords[color_string] += np.array([zoom_pixels_y, zoom_pixels_x])
+                all_start_end_positions[color_string]["start_coords"] += np.array([zoom_pixels_y, zoom_pixels_x])
+                all_start_end_positions[color_string]["end_coords"] += np.array([zoom_pixels_y, zoom_pixels_x])
+                # Pad image with zeros
+                self.target.image_dict[color] = np.pad(
+                    self.target.image_dict[color],
+                    ((zoom_pixels_y, zoom_pixels_y), (zoom_pixels_x, zoom_pixels_x)),
+                    mode="constant",
+                    constant_values=0,
+                )
+            target_y = self.target.y + 2 * zoom_pixels_y
+            target_x = self.target.x + 2 * zoom_pixels_x
+
+        else:
             target_y = self.target.y
             target_x = self.target.x
-        else:
-            # Subtract from the coords, until we have exactly `crop_distance` pixels of empty space on all sides
-            min_y, min_x, max_y, max_x = _get_min_max_coords(all_coords)
-            lower_crop = np.array([min_y, min_x]).astype(np.int32) - self.crop_distance
-            upper_crop = np.array([max_y, max_x]).astype(np.int32) + self.crop_distance
-            for color, coords in all_coords.items():
-                coords -= lower_crop
-                all_start_end_positions[color]["start_coords"] -= lower_crop
-                all_start_end_positions[color]["end_coords"] -= lower_crop
-
-            # Appropriately pad / crop the image, so we have a border of `crop_pixels`
-            pad_top = max(0, -lower_crop[0])
-            pad_left = max(0, -lower_crop[1])
-            pad_bottom = max(0, upper_crop[0] - image.shape[0])
-            pad_right = max(0, upper_crop[1] - image.shape[1])
-            padded_image = np.pad(
-                image, ((pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=0
-            )
-            image = padded_image[
-                lower_crop[0] + pad_top : upper_crop[0] + pad_top,
-                lower_crop[1] + pad_left : upper_crop[1] + pad_left,
-            ]
-            target_y, target_x = image.shape
-            print(f"Cropped image from (y, x) = {self.target.y, self.target.x} to {target_y, target_x}")
 
         # If we're using borders, then we need to add a shape at the start & end,
         # which we choose to be as close to the border as possible
+        border_lengths = {}
         if use_borders:
             for color_string, coords in all_coords.items():
+                image = self.target.image_dict[color]
+
                 # Get start shape: starting from the starting position but moving backwards, to the closest border
-                best_coords, best_coords_uncropped, _ = self.get_best_shape(
+                best_coords_start, _, _ = self.get_best_shape(
                     image,
                     start_dir=-all_start_end_positions[color_string]["start_dir"],
                     start_coords=all_start_end_positions[color_string]["start_coords"],
@@ -522,10 +475,10 @@ class Drawing:
                     )[1],
                     use_bounds=False,
                 )
-                all_coords[color_string] = np.concatenate([best_coords[:, ::-1].T, all_coords[color_string]])
+                all_coords[color_string] = np.concatenate([best_coords_start[:, ::-1].T, all_coords[color_string]])
 
                 # Get end shape: starting from the end position and moving to the closest border
-                best_coords, best_coords_uncropped, _ = self.get_best_shape(
+                best_coords_end, _, _ = self.get_best_shape(
                     image,
                     start_dir=all_start_end_positions[color_string]["end_dir"],
                     start_coords=all_start_end_positions[color_string]["end_coords"],
@@ -534,7 +487,8 @@ class Drawing:
                     )[1],
                     use_bounds=False,
                 )
-                all_coords[color_string] = np.concatenate([all_coords[color_string], best_coords.T])
+                all_coords[color_string] = np.concatenate([all_coords[color_string], best_coords_end.T], axis=0)
+                border_lengths[color_string] = (best_coords_start.shape[1], best_coords_end.shape[1])
 
                 # Test: are the min coord distances very small, and are the start/end coords on the border?
                 diffs = np.diff(all_coords[color_string], axis=0)
@@ -546,18 +500,13 @@ class Drawing:
                     assert border_coord_diff < 3.0, (
                         f"Found unexpected coord: {coord} with diff to border {border_coord} of {border_coord_diff:.3f}"
                     )
+        else:
+            border_lengths = {color_string: (0, 0) for color_string in all_coords.keys()}
 
         # Create canvas and draw on it
-        output_sf = self.target.output_x / target_x
-        output_y = int(output_sf * target_y)
-        canvas = Image.new("RGB", (self.target.output_x, output_y), (255, 255, 255))
-        draw = ImageDraw.Draw(canvas)
-        for color_string, coords in all_coords.items():
-            coords = (output_sf * all_coords[color_string]).tolist()
-            for (y0, x0), (y1, x1) in zip(coords[:-1], coords[1:]):
-                draw.line([(x0, y0), (x1, y1)], fill=color_string, width=1)
+        canvas, _, _ = self.make_canvas_and_crop_coords(all_coords, target_y, target_x)
 
-        return canvas, all_coords, (target_y, target_x)
+        return canvas, all_coords, border_lengths, target_y, target_x
 
     def get_best_shape(
         self,
@@ -605,12 +554,69 @@ class Drawing:
         best_idx = np.argmax(pixel_values)
         return coords_list[best_idx]
 
+    def make_canvas_and_crop_coords(
+        self,
+        all_coords: dict[str, Float[Arr, "n_pixels 2"]],
+        target_y: int,
+        target_x: int,
+        bounding_x: tuple[float, float] = (0.0, 1.0),
+        bounding_y: tuple[float, float] = (0.0, 1.0),
+    ) -> tuple[Image.Image, dict[str, Float[Arr, "n_pixels 2"]]]:
+        """
+        Function which makes a canvas to display, and at the same time crops coordinates & gives us rescaled
+        coords (in 0-1 range) to be used for GCode generation.
+        """
+        all_coords_rescaled = {}
+
+        output_x = self.target.output_x
+        output_y = int(output_x * target_y / target_x)
+        output_sf = output_x / target_x
+
+        size = np.array([target_y, target_x]) - 1
+        bounding_min = np.array([bounding_y[0], bounding_x[0]])
+        bounding_max = np.array([bounding_y[1], bounding_x[1]])
+        bounding_lengths = bounding_max - bounding_min
+        output_size = np.array([output_y * bounding_lengths[0], output_x * bounding_lengths[1]])
+
+        canvas = Image.new("RGB", (int(output_size[1]), int(output_size[0])), (255, 255, 255))
+        draw = ImageDraw.Draw(canvas)
+        for color_string, coords in all_coords.items():
+            # Crop the coordinates, so we only get ones that appear inside the bounding box
+            coords_scaled_to_01 = coords / size
+            coords_mask = (coords_scaled_to_01 >= bounding_min) & (coords_scaled_to_01 <= bounding_max)
+            coords = coords[coords_mask.all(axis=-1)]
+
+            # Take our cropped coordinates, shift them into the bounding box & write to the canvas
+            # them to the canvas
+            coords = output_sf * (coords - size * bounding_min)
+            for (y0, x0), (y1, x1) in zip(coords[:-1], coords[1:]):
+                draw.line([(x0, y0), (x1, y1)], fill=color_string, width=1)
+
+            # Rescale coordinates (preserving aspect ratio) to be in the [0, 1] range
+            all_coords_rescaled[color_string] = coords / output_size.max()
+
+        # Resize canvas to height 500
+        canvas_y = 500
+        canvas_x = 500 * (output_x * (bounding_x[1] - bounding_x[0])) / (output_y * (bounding_y[1] - bounding_y[0]))
+        canvas = canvas.resize((int(canvas_x), canvas_y))
+
+        # Check all_coords_rescaled is within the bounding box
+        min_y, min_x, max_y, max_x = _get_min_max_coords(all_coords_rescaled)
+        # assert min_y >= 0.0 and max_y <= bounding_lengths[0]
+        # assert min_x >= 0.0 and max_x <= bounding_lengths[1]
+
+        print(
+            f"  Bounding box (rescaled, inner):  [{min_x:.6f}-{max_x:.6f}, {min_y:.6f}-{max_y:.6f}], AR = {(max_y - min_y) / (max_x - min_x):.6f}"
+        )
+
+        return canvas, all_coords_rescaled, bounding_lengths.tolist()
+
 
 def get_closest_point_on_border(
     coords: Float[Arr, "2"], max_dim_0: int, max_dim_1: int, min_dim_0: int = 0, min_dim_1: int = 0
 ) -> tuple[int, Float[Arr, "2"]]:
     border_diffs = [max_dim_0 - coords[0], coords[1] - min_dim_1, coords[0] - min_dim_0, max_dim_1 - coords[1]]
-    assert min(border_diffs) >= 0, f"Coords {coords} are out of bounds"
+    assert min(border_diffs) >= 0, f"Coords {coords} are out of bounds {min_dim_0}-{max_dim_0}, {min_dim_1}-{max_dim_1}"
     closest_border = np.argmin(border_diffs).item()
     return closest_border, [
         np.array([max_dim_0, coords[1]]),
@@ -618,16 +624,6 @@ def get_closest_point_on_border(
         np.array([min_dim_0, coords[1]]),
         np.array([coords[0], max_dim_1]),
     ][closest_border]
-
-
-# def get_random_point_on_border(y: int, x: int) -> Int[Arr, "2"]:
-#     if np.random.rand() < 0.5:
-#         start_y = y if np.random.rand() < 0.5 else 0
-#         start_x = np.random.rand() * x
-#     else:
-#         start_y = np.random.rand() * y
-#         start_x = x if np.random.rand() < 0.5 else 0
-#     return np.array([start_y, start_x])
 
 
 def get_color_string(color: tuple[int, int, int]):
@@ -651,25 +647,8 @@ def return_to_origin(
     y: float,
     side: int,  # 0 = right, moving anticlockwise
 ) -> list[tuple[float, float]]:
-    """Returns a list of (y, x) tuples which helps you get back to the origin."""
-
-    if side % 2 == 0:
-        return [(x, 0), (0, 0)]
-    else:
-        return [(0, y), (0, 0)]
-
-    # ph = 0.5 * margin
-
-    # if side == 0:  # move to the right of the image, then down, then left to origin
-    #     return [(x + ph, y), (x + ph, ph), (ph, ph)]
-    # elif side == 1:  # move above the image, then left, then down to origin
-    #     return [(x, y + ph), (ph, y + ph), (ph, ph)]
-    # elif side == 2:  # move to the left of the image, then down, then left to origin
-    #     return [(x - ph, y), (x - ph, ph), (ph, ph)]
-    # elif side == 3:  # move below the image, then left, then down to origin
-    #     return [(x, y - ph), (ph, y - ph), (ph, ph)]
-    # else:
-    #     raise ValueError(f"Invalid side: {side}")
+    """Returns a list of (y, x) tuples which traces a path back to the origin."""
+    return [(x, y), (x, 0) if side % 2 == 0 else (0, y), (0, 0)]
 
 
 def mask_coords(
@@ -688,9 +667,9 @@ def mask_coords(
         max_out_of_bounds = np.max(
             [
                 -coords[0].min() / max_y,
-                (coords[0].max() - 1 - max_y) / max_y,
+                (coords[0].max() - max_y) / max_y,
                 -coords[1].min() / max_x,
-                (coords[1].max() - 1 - max_x) / max_x,
+                (coords[1].max() - max_x) / max_x,
             ]
         )
         if max_out_of_bounds > outer_bound:
@@ -700,9 +679,9 @@ def mask_coords(
         end_out_of_bounds = np.max(
             [
                 -coords[0, -1] / max_y,
-                (coords[0, -1] - 1 - max_y) / max_y,
+                (coords[0, -1] - max_y) / max_y,
                 -coords[1, -1] / max_x,
-                (coords[1, -1] - 1 - max_x) / max_x,
+                (coords[1, -1] - max_x) / max_x,
             ]
         )
         if end_out_of_bounds > -inner_bound:
@@ -845,21 +824,22 @@ def _get_min_max_coords(coords: dict[Any, Float[Arr, "2 n_pixels"]]) -> tuple[fl
 
 
 def make_gcode(
-    all_coords: dict[tuple[int, int, int], Int[Arr, "n_coords 2"]],
-    image_bounding_box: tuple[float, float],  # returned from the image (gives us padding)
+    all_coords: dict[str, Int[Arr, "n_coords 2"]],
+    image_bounding_box: tuple[float, float],  # area we want to place `all_coords` within
     gcode_bounding_box: tuple[float, float],  # drawing area for gcode
+    border_lengths: dict[str, tuple[int, int]],  # amount of pixels we draw with pen-up from start & end of each colour
     margin: float = 0.0,
     tiling: tuple[int, int] = (1, 1),
     speed: int = 10_000,
     plot_gcode: bool = False,
     rotate: bool = False,
-) -> dict[tuple[int, int, int], list[str]]:
+) -> dict[str, list[str]]:
     """
     Generates G-code for multiple different copies of the image.
     """
     gcode_all = defaultdict(list)
     times_all = defaultdict(list)
-    normalized_coords_all = defaultdict(list)
+    coords_gcode_scale_all = defaultdict(list)
 
     # We assume bounding box has been zeroed
     gcode_bounding_box = [(0.0, 0.0), gcode_bounding_box]
@@ -867,12 +847,17 @@ def make_gcode(
 
     # Start by changing (y, x) representations to (x, y)
     all_coords = {k: v[:, ::-1] for k, v in all_coords.items()}
-    image_bounding_box = list(image_bounding_box)[::-1]
+    image_bounding_box = tuple(image_bounding_box)[::-1]
 
     # Optionally rotate (we do this if the bounding box aspect ratio makes this favourable)
     if rotate:
         for color, coords in all_coords.items():
-            all_coords[color] = np.array([coords[:, 1], -coords[:, 0]]).T
+            all_coords[color] = np.array([coords[:, 1], image_bounding_box[0] - coords[:, 0]]).T
+        image_bounding_box = tuple(image_bounding_box)[::-1]
+
+    # After the flipping and optional rotations, check our bounds are still valid
+    all_coords_max = np.max(np.stack([v.max(axis=0) for v in all_coords.values()]), axis=0)
+    assert np.all(all_coords_max <= image_bounding_box), f"Out of bounds: {all_coords_max} > {image_bounding_box}"
 
     for x_iter in range(tiling[0]):
         for y_iter in range(tiling[1]):
@@ -881,42 +866,44 @@ def make_gcode(
             _y0 = y0 + (y1 - y0) * y_iter / tiling[1]
             _x1 = x0 + (x1 - x0) * (x_iter + 1) / tiling[0]
             _y1 = y0 + (y1 - y0) * (y_iter + 1) / tiling[1]
-            _bounding_box = ((_x0 + margin, _y0 + margin), (_x1 - margin, _y1 - margin))
+            _bounding_box = ((_x0, _y0), (_x1 - margin, _y1 - margin))
 
-            gcode, times, normalized_coords = make_gcode_single(
+            gcode, times, coords_gcode_scale = make_gcode_single(
                 all_coords,
                 image_bounding_box=image_bounding_box,
                 gcode_bounding_box=_bounding_box,
+                border_lengths=border_lengths,
                 speed=speed,
-                margin=margin,
             )
             for k, v in gcode.items():
                 gcode_all[k].extend(v)
             for k, v in times.items():
                 times_all[k].append(v)
-            for k, v in normalized_coords.items():
-                normalized_coords_all[k].append(v.tolist())
+            for k, v in coords_gcode_scale.items():
+                coords_gcode_scale_all[k].extend(v)
 
     print()
     for color, times in times_all.items():
         print(f"{color:<13} ... time = sum({', '.join(f'{t:05.2f}' for t in times)}) = {sum(times):.2f} minutes")
 
     if plot_gcode:
-        output_area = 500 * 500
+        output_area = 600 * 600
         output_x = (output_area * (x1 - x0) / (y1 - y0)) ** 0.5
         output_y = (output_area * (y1 - y0) / (x1 - x0)) ** 0.5
         ((x0, y0), (x1, y1)) = gcode_bounding_box
         sf = output_x / (x1 - x0)
         canvas_all = Image.new("RGB", (int(output_x), int(output_y)), (255, 255, 255))
         draw_all = ImageDraw.Draw(canvas_all)
-        for color, lines in normalized_coords_all.items():
-            lines = np.concatenate(lines, axis=0)
+        for color, all_lines in coords_gcode_scale_all.items():
             canvas = Image.new("RGB", (int(output_x), int(output_y)), (255, 255, 255))
-            draw = ImageDraw.Draw(canvas)
-            points = list(zip(sf * (lines[:, 0] - x0), sf * (y1 - lines[:, 1])))
-            draw.line(points, fill=color if color != "bounding_box" else "grey", width=1)
-            draw_all.line(points, fill=color if color != "bounding_box" else "grey", width=1)
-            display(canvas)
+            for pen_down, lines in all_lines:
+                draw = ImageDraw.Draw(canvas)
+                points = list(zip(sf * (lines[:, 0] - x0), sf * (y1 - lines[:, 1])))
+                width = 1 if pen_down else 4
+                fill = "#aaa" if (color == "bounding_box" or not pen_down) else color
+                draw.line(points, fill=fill, width=width)
+                draw_all.line(points, fill=fill, width=width)
+            display(canvas)  # ImageOps.expand(canvas, border=(1, 0, 0, 1), fill="white")
         display(canvas_all)
 
     return gcode_all
@@ -926,8 +913,8 @@ def make_gcode_single(
     all_coords: dict[tuple[int, int, int], Int[Arr, "n_coords 2"]],
     image_bounding_box: tuple[float, float],
     gcode_bounding_box: tuple[tuple[float, float], tuple[float, float]],
+    border_lengths: dict[str, tuple[int, int]],
     speed: int = 10_000,
-    margin: float = 0.0,
 ) -> dict[tuple[int, int, int], list[str]]:
     """
     Creates G-code for a single tile image. This gets concatenated for multiple tiles.
@@ -935,82 +922,101 @@ def make_gcode_single(
     all_coords = {k: v.copy() for k, v in all_coords.items()}
 
     # Figure out which side each color starts and ends on
-    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords)
     start_end_sides = {}
     for color, coords in all_coords.items():
         start_end_sides[color] = {}
         for side_type, side_idx in zip(("start", "end"), (0, -1)):
             coord = coords[side_idx]
-            border, border_coord = get_closest_point_on_border(coord, max_x, max_y, min_x, min_y)
+            border, border_coord = get_closest_point_on_border(coord, *image_bounding_box)
             assert np.linalg.norm(coord - border_coord) < 3.0, (
                 f"Found unexpected coord: {coord} with diff to border {border_coord} of {np.linalg.norm(coord - border_coord):.3f}"
             )
             start_end_sides[color][side_type] = border % 4
 
-    # Scale coords to gcode bounding box range
+    xmin, ymin, xmax, ymax = _get_min_max_coords(all_coords)
+    print(
+        f"  Bounding box (orig, outer):  [{0.0:.3f}-{image_bounding_box[0]:.3f}, {0.0:.3f}-{image_bounding_box[1]:.3f}], AR = {(image_bounding_box[1]) / image_bounding_box[0]:.3f}"
+    )
+    print(
+        f"  Bounding box (orig, inner):  [{xmin:.3f}-{xmax:.3f}, {ymin:.3f}-{ymax:.3f}], AR = {(ymax - ymin) / (xmax - xmin):.3f}"
+    )
 
-    # min_y, min_x, max_y, max_x = 0, 0, *image_bounding_box
-    eps = 1e-4
+    # Rescale coordinates to fit within GCode bounding box (we scale as large as possible while staying inside it)
     (x0, y0), (x1, y1) = gcode_bounding_box
-    sf = min((x1 - x0) / (max_x - min_x), (y1 - y0) / (max_y - min_y))  # = max scale while staying inside bounding box
-    all_coords_normalized = {}
-    for color, coords in all_coords.items():
-        # Normalize coords to fit bounding box
-        coords[:, 0] = x0 + (coords[:, 0] - min_x) * sf
-        coords[:, 1] = y0 + (coords[:, 1] - min_y) * sf
-        assert coords[:, 0].min() >= x0 - eps and coords[:, 0].max() <= x1 + eps
-        assert coords[:, 1].min() >= y0 - eps and coords[:, 1].max() <= y1 + eps
-        all_coords_normalized[color] = coords
+    sf = min((x1 - x0) / image_bounding_box[0], (y1 - y0) / image_bounding_box[1])
+    all_coords_gcode_scale = {color: np.array([x0, y0]) + coords * sf for color, coords in all_coords.items()}
 
-    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_normalized)
-    all_coords_normalized["bounding_box"] = np.array(
+    # Print new bounding box, in GCode terms. The outer box is the one we sit inside, and the inner box is the one we
+    # actually draw (so the inner box should be within the outer box, but touch it on 3/4 of the sides, otherwise
+    # we're wasting space - we can't guarantee touching on all 4 sides cause this fucks with the aspect ratio).
+    min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_gcode_scale)
+    all_coords_gcode_scale["bounding_box"] = np.array(
         [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]]
     )
-    print(f"  Bounding box: [{min_x:.3f}-{max_x:.3f}, {min_y:.3f}-{max_y:.3f}]")
+    print(f"  Bounding box (outer): [{x0:06.2f}-{x1:06.2f}, {y0:06.2f}-{y1:06.2f}], AR = {(y1 - y0) / (x1 - x0):.3f}")
+    print(
+        f"  Bounding box (inner): [{min_x:06.2f}-{max_x:06.2f}, {min_y:06.2f}-{max_y:06.2f}], AR = {(max_y - min_y) / (max_x - min_x):.3f}"
+    )
 
-    lines = {}
+    # Create dicts to store gcode and time for each colour to be drawn
+    gcode = {}
     times = {}
 
-    lines["bounding_box"] = ["M3S250 ; raise"]
+    # Fill in bounding box lines, i.e. just moving around the corners of the bounding box
+    gcode["bounding_box"] = ["M3S250 ; raise"]
     for x, y in [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]:
-        lines["bounding_box"].append(f"G1 X{x:.3f} Y{y:.3f} F5000")
+        gcode["bounding_box"].append(f"G1 X{x:.3f} Y{y:.3f} F5000")
 
-    for color, coords_list in all_coords_normalized.items():
-        # Move from origin to starting position, and lower pen
-        lines[color] = ["M3S250 ; raise (before moving to starting position)"]
+    # For all colors, update the gcode movements so that they follow this pattern:
+    #   (1) Raise pen
+    #   (2) Move from origin to starting position
+    #   (3) Lower pen
+    #   (4) Draw (i.e. the coords_list we've already computed for this color)
+    #   (5) Raise pen
+    #   (6) Move back to origin
+    for color, coords_list in all_coords_gcode_scale.items():
+        border_start, border_end = border_lengths.get(color, (0, 0))
+        border_end = len(coords_list) - 1 - border_end
+
+        # (1, 2) Raise pen & move to starting position
+        gcode[color] = ["M3S250 ; raise (before moving to starting position)"]
         start_xy_seq = return_to_origin(
             x=coords_list[0, 0],
             y=coords_list[0, 1],
             side=2 if color == "bounding_box" else start_end_sides[color]["start"],
         )[::-1]
-        lines[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in start_xy_seq])
+        gcode[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in start_xy_seq])
 
-        # Add all the drawing coordinates
+        # (4) Add all the drawing coordinates (this includes step 3 & 5, lowering & raising)
         x = y = None
         for i, (x, y) in enumerate(coords_list):
-            lines[color].append(f"G1 X{x:.3f} Y{y:.3f} F{speed if i > 0 else 5000}")
-            if i == 0:
-                lines[color].append("M3S0 ; lower (to start drawing)")
+            if i == border_start:
+                gcode[color].append("M3S0 ; lower (to start drawing)")
+            gcode[color].append(f"G1 X{x:.3f} Y{y:.3f} F{speed if i > 0 else 5000}")
+            if i == border_end:
+                gcode[color].append("M3S250 ; raise (to end drawing)")
 
-        # End the drawing, by raising pen & moving to the origin
+        # (6) End the drawing by moving back to the origin
         end_xy_seq = return_to_origin(
             x=coords_list[-1, 0],
             y=coords_list[-1, 1],
             side=2 if color == "bounding_box" else start_end_sides[color]["end"],
         )
-        lines[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in end_xy_seq])
-        lines[color].append("M3S250 ; raise (finished drawing)")
+        gcode[color].extend([f"G1 X{x:.3f} Y{y:.3f} F{speed}" for y, x in end_xy_seq])
 
-        # Update normalized coords to reflect the journey to & from the origin
-        all_coords_normalized[color] = np.concatenate([np.array(start_xy_seq), coords_list, np.array(end_xy_seq)])
+        # Update normalized coords to reflect the journey to & from the origin (including whether some of the
+        # start and end coords were actually pen-up)
+        all_coords_gcode_scale[color] = [
+            (False, np.concatenate([np.array(start_xy_seq), coords_list[:border_start]])),
+            (True, coords_list[border_start:border_end]),
+            (False, np.concatenate([coords_list[border_end:], np.array(end_xy_seq)])),
+        ]
+        print(color, border_start, border_end, border_lengths, len(coords_list))
 
         # Print total time this will take
-        distances = np.linalg.norm(np.diff(coords_list, axis=0), axis=1)
-        # diffs = coords_list[1:] - coords_list[:-1]
-        # distances = (diffs**2).sum(-1) ** 0.5
-        distance_for_one_minute = 1611
+        coords_concatenated = np.concatenate([coords for _, coords in all_coords_gcode_scale[color]])
+        distances = np.linalg.norm(np.diff(coords_concatenated, axis=0), axis=1)
+        distance_for_one_minute = 1400  # TODO - improve this estimate
         times[color] = distances.sum() / distance_for_one_minute
 
-    # print("\n".join(lines[:20]))
-    # pyperclip.copy("\n".join(lines[50_000:]))
-    return lines, times, all_coords_normalized
+    return gcode, times, all_coords_gcode_scale
