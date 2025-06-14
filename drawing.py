@@ -1,14 +1,13 @@
 import enum
-import re
+import json
 import math
-import pprint
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 import einops
-import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
 import tqdm
@@ -382,7 +381,10 @@ class Drawing:
             )
 
     def create_img(
-        self, seed: int = 0, use_borders: bool = False
+        self,
+        seed: int = 0,
+        use_borders: bool = False,
+        name: str | None = None,
     ) -> tuple[Image.Image, dict[str, Float[Arr, "n_pixels 2"]], tuple[int, int]]:
         np.random.seed(seed)
 
@@ -526,9 +528,20 @@ class Drawing:
             border_lengths = {color_string: (0, 0) for color_string in all_coords.keys()}
 
         # Create canvas and draw on it
-        canvas, _, _ = self.make_canvas_and_crop_coords(all_coords, target_y, target_x)
+        canvas, svg = self.make_canvas_and_crop_coords(all_coords, target_y, target_x)[:2]
 
-        return canvas, all_coords, border_lengths, target_y, target_x
+        # Optionally save things
+        if name is not None:
+            canvas.save(f"outputs_drawing/{name}.png")
+            with open(f"outputs_drawing/{name}.svg", "w") as f:
+                f.write(svg)
+            np.savez(f"outputs_drawing/{name}.npz", **all_coords)
+            json.dump(
+                {"border_lengths": border_lengths, "target_y": target_y, "target_x": target_x},
+                open(f"outputs_drawing/{name}.json", "w"),
+            )
+
+        return canvas, svg, all_coords, border_lengths, target_y, target_x
 
     def get_best_shape(
         self,
@@ -584,10 +597,10 @@ class Drawing:
         bounding_x: tuple[float, float] = (0.0, 1.0),
         bounding_y: tuple[float, float] = (0.0, 1.0),
         fractions: float | dict[str, float] | None = None,
-    ) -> tuple[Image.Image, dict[str, Float[Arr, "n_pixels 2"]]]:
+    ) -> tuple[Image.Image, dict[str, Float[Arr, "n_pixels 2"]], str]:
         """
         Function which makes a canvas to display, and at the same time crops coordinates & gives us rescaled
-        coords (in 0-1 range) to be used for GCode generation.
+        coords (in 0-1 range) to be used for GCode generation. Also returns an SVG representation with a transparent background.
         """
         all_coords_rescaled = {}
 
@@ -603,12 +616,13 @@ class Drawing:
 
         canvas = Image.new("RGB", (int(output_size[1]), int(output_size[0])), (255, 255, 255))
         draw = ImageDraw.Draw(canvas)
-        for color_string, coords in all_coords.items():
+        svg_lines = []
 
+        for color_string, coords in all_coords.items():
             # Possibly crop the coordinates down to a subset of them
             if fractions is not None:
                 fraction = fractions if isinstance(fractions, float) else fractions[color_string]
-                coords = coords[:int(len(coords) * fraction)].copy()
+                coords = coords[: int(len(coords) * fraction)].copy()
 
             # Crop the coordinates, so we only get ones that appear inside the bounding box
             coords_scaled_to_01 = coords / size
@@ -616,10 +630,12 @@ class Drawing:
             coords = coords[coords_mask.all(axis=-1)]
 
             # Take our cropped coordinates, shift them into the bounding box & write to the canvas
-            # them to the canvas
             coords = output_sf * (coords - size * bounding_min)
             for (y0, x0), (y1, x1) in zip(coords[:-1], coords[1:]):
                 draw.line([(x0, y0), (x1, y1)], fill=color_string, width=1)
+                svg_lines.append(
+                    f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{color_string}" stroke-width="1"/>'
+                )
 
             # Rescale coordinates (preserving aspect ratio) to be in the [0, 1] range
             all_coords_rescaled[color_string] = coords / output_size.max()
@@ -631,14 +647,18 @@ class Drawing:
 
         # Check all_coords_rescaled is within the bounding box
         min_y, min_x, max_y, max_x = _get_min_max_coords(all_coords_rescaled)
-        # assert min_y >= 0.0 and max_y <= bounding_lengths[0]
-        # assert min_x >= 0.0 and max_x <= bounding_lengths[1]
 
         print(
             f"  Bounding box (rescaled, inner):  [{min_x:.6f}-{max_x:.6f}, {min_y:.6f}-{max_y:.6f}], AR = {(max_y - min_y) / (max_x - min_x):.6f}"
         )
 
-        return canvas, all_coords_rescaled, bounding_lengths.tolist()
+        svg = (
+            f'<svg width="{output_size[1]}" height="{output_size[0]}" xmlns="http://www.w3.org/2000/svg" style="background-color: transparent;">'
+            + "".join(svg_lines)
+            + "</svg>"
+        )
+
+        return canvas, svg, all_coords_rescaled, svg
 
 
 def get_closest_point_on_border(
@@ -865,7 +885,7 @@ def make_gcode(
     plot_gcode: bool = False,
     rotate: bool = False,
     pen_height: int = 450,
-    demo: bool = False, # turn this on and we only print the first 1000 lines, with all pen up & half speed
+    demo: bool = False,  # turn this on and we only print the first 1000 lines, with all pen up & half speed
 ) -> dict[str, list[str]]:
     """
     Generates G-code for multiple different copies of the image.
@@ -922,7 +942,9 @@ def make_gcode(
     if demo:
         for color, gcode in gcode_all.items():
             gcode_all[color] = gcode[:1000]
-            gcode_all[color] = [g.replace(f"F{speed}", f"F{int(speed/2)}") for g in gcode_all[color] if not g.startswith("M3S0")]
+            gcode_all[color] = [
+                g.replace(f"F{speed}", f"F{int(speed / 2)}") for g in gcode_all[color] if not g.startswith("M3S0")
+            ]
 
     if plot_gcode:
         output_area = 600 * 600
@@ -992,9 +1014,7 @@ def make_gcode_single(
     # Print new bounding box, in GCode terms (note that we still use the originally provided gcode bounding box
     # rather than cropping further, since we might want the empty space!).
     min_x, min_y, max_x, max_y = _get_min_max_coords(all_coords_gcode_scale)
-    all_coords_gcode_scale["bounding_box"] = np.array(
-        [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
-    )
+    all_coords_gcode_scale["bounding_box"] = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]])
     print(f"  Bounding box (outer): [{x0:06.2f}-{x1:06.2f}, {y0:06.2f}-{y1:06.2f}], AR = {(y1 - y0) / (x1 - x0):.3f}")
     print(
         f"  Bounding box (inner): [{min_x:06.2f}-{max_x:06.2f}, {min_y:06.2f}-{max_y:06.2f}], AR = {(max_y - min_y) / (max_x - min_x):.3f}"
@@ -1054,7 +1074,6 @@ def make_gcode_single(
         if duplicate_indices:
             gcode[color] = [g for i, g in enumerate(gcode[color]) if i not in duplicate_indices]
 
-
         # Update normalized coords to reflect the journey to & from the origin (including whether some of the
         # start and end coords were actually pen-up)
         all_coords_gcode_scale[color] = [
@@ -1073,25 +1092,24 @@ def make_gcode_single(
     return gcode, times
 
 
-
 def _create_coords_from_gcode(gcode: list[str]) -> list[tuple[Float[Arr, "length 2"], bool]]:
     """Creates list of coords (and whether pen is up/down) from GCode. Good for sanity checking!"""
 
     assert gcode[0].startswith("M3S"), "GCode should always start with raise/lower op, to be sure!"
 
     coords, segments, pen_up = [], [], True
-    
+
     for cmd in gcode:
-        if cmd.startswith('M3S'):
+        if cmd.startswith("M3S"):
             if coords:
                 segments.append((np.array(coords), pen_up))
                 coords = [coords[-1]] if coords else []
-            pen_up = not cmd.startswith('M3S0')
-        elif cmd.startswith('G1'):
-            x, y = re.findall(r'X([\d.-]+) Y([\d.-]+)', cmd)[0]
+            pen_up = not cmd.startswith("M3S0")
+        elif cmd.startswith("G1"):
+            x, y = re.findall(r"X([\d.-]+) Y([\d.-]+)", cmd)[0]
             coords.append([float(x), float(y)])
-    
+
     if coords:
         segments.append((np.array(coords), pen_up))
-    
+
     return segments
