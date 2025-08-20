@@ -150,7 +150,7 @@ def pair_to_index(
 # ================================================================
 
 
-def build_through_pixels_dict(
+'''def build_through_pixels_dict(
     x,
     y,
     n_nodes,
@@ -509,7 +509,165 @@ def build_through_pixels_dict(
     else:
         clear_output()
 
-    return d_coords, d_joined, d_sides, t_pixels_cropped
+    return d_coords, d_joined, d_sides, t_pixels_cropped '''
+def build_through_pixels_dict(x, y, n_nodes, shape, critical_distance=14, only_return_d_coords=False, width_to_gap_ratio=1):
+    """
+    Clean version: each nail = 1 node (no parity).
+    Returns: d_coords, d_pixels, d_joined, d_sides, t_pixels
+    - d_coords[i] is a torch tensor [y, x] (int)
+    - d_pixels[(i,j)] is a torch tensor shape (2, N) with (y,x) order
+    - d_joined[i] is a sorted list of candidate j (excludes near neighbors within critical_distance along the ring)
+    - d_sides[i] side index for rectangle (0..3) or 0 for ellipse
+    - t_pixels is torch.zeros((n_nodes, n_nodes, 2, max_pixels), dtype=int)
+    """
+    import math
+    from tqdm import tqdm
+    import numpy as np
+    import torch as t
+
+
+    # sanity
+    if shape == "Rectangle" and type(n_nodes) == int:
+        assert (n_nodes % 4) == 0, f"n_nodes = {n_nodes} needs to be divisible by 4, or else there will be an error"
+
+
+    # prepare containers
+    d_coords = {}
+    d_pixels = {}
+    d_joined = {}
+    d_sides = {}
+
+
+    shape_l = shape.lower()
+
+
+    # ---------- 1) build d_coords and d_sides ----------
+    if shape_l in ("ellipse", "circle", "round"):
+        # keep same convention as original: even x recommended
+        assert x % 2 == 0, "x must be even to take advantage of symmetry"
+        angles = - np.linspace(0, 2 * np.pi, n_nodes + 1)[:-1]
+        x_coords = 1 + ((0.5 * x) - 2) * (1 + np.cos(angles))
+        y_coords = 1 + ((0.5 * y) - 2) * (1 - np.sin(angles))
+        coords = t.stack([t.from_numpy(y_coords).to(t.float32), t.from_numpy(x_coords).to(t.float32)]).T
+        # store as int tensors (y,x)
+        for i in range(n_nodes):
+            arr = coords[i].round().to(t.int64)
+            d_coords[i] = arr  # tensor([y, x])
+            d_sides[i] = 0
+    else:
+        # Rectangle: distribute nodes along rectangle perimeter (clockwise)
+        W = int(x)
+        H = int(y)
+        # lengths (approx) of edges (top,right,bottom,left)
+        edge_lengths = [W, H, W, H]
+        perim = sum(edge_lengths)
+        for i in range(n_nodes):
+            frac = i / n_nodes
+            dist = frac * perim
+            cur = 0.0
+            placed = False
+            for side_idx, L in enumerate(edge_lengths):
+                if dist <= cur + L - 1e-9:
+                    offset = dist - cur
+                    if side_idx == 0:  # top
+                        xx = int(round(offset))
+                        yy = 0
+                    elif side_idx == 1:  # right
+                        xx = W - 1
+                        yy = int(round(offset))
+                    elif side_idx == 2:  # bottom
+                        xx = int(round(W - 1 - offset))
+                        yy = H - 1
+                    else:  # left
+                        xx = 0
+                        yy = int(round(H - 1 - offset))
+                    xx = max(0, min(W - 1, xx))
+                    yy = max(0, min(H - 1, yy))
+                    d_coords[i] = t.tensor([yy, xx], dtype=t.int64)
+                    d_sides[i] = side_idx
+                    placed = True
+                    break
+                cur += L
+            if not placed:
+                d_coords[i] = t.tensor([0, 0], dtype=t.int64)
+                d_sides[i] = 0
+
+
+    if only_return_d_coords:
+        return d_coords
+
+
+    # ---------- 2) build d_joined: allowed target nodes for each i ----------
+    # rule: allow j if circular min distance >= critical_distance (avoid too-short neighbors)
+    for i in range(n_nodes):
+        allowed = []
+        for j in range(n_nodes):
+            if j == i:
+                continue
+            # circular distance along ring
+            diff = abs(j - i)
+            circ = min(diff, n_nodes - diff)
+            if circ >= critical_distance:
+                allowed.append(j)
+        # sort by (circular) positive order starting after i to have deterministic ordering
+        # we will sort by (j - i) % n_nodes to keep consistent traversal order
+        allowed_sorted = sorted(allowed, key=lambda j: ((j - i) % n_nodes))
+        d_joined[i] = allowed_sorted
+
+
+    # ---------- 3) compute pixel lists for each valid pair (i,j) ----------
+    # To save memory/time compute only for pairs present in d_joined.
+    pairs = []
+    for i in range(n_nodes):
+        for j in d_joined[i]:
+            # ensure we only compute once per unordered pair: compute when i < j
+            if i < j:
+                pairs.append((i, j))
+
+
+    # progress bar optional
+    progress_bar = tqdm(total=len(pairs), desc="Building pixels dict")
+
+
+    # Helper: call existing through_pixels(p0, p1) which should return tensor (2,N) of (y,x)
+    for (i0, i1) in pairs:
+        p0 = d_coords[i0].to(t.int64)
+        p1 = d_coords[i1].to(t.int64)
+        # compute pixel line tensor (2, N)
+        pixels = through_pixels(p0, p1).to(t.int64)  # reuse repo helper
+        if pixels.numel() == 0:
+            progress_bar.update(1)
+            continue
+        # store forward and reversed
+        d_pixels[(i0, i1)] = pixels  # (2, N) where row0 = y, row1 = x
+        d_pixels[(i1, i0)] = pixels.flip(-1)  # reverse order so (i1,i0) goes back
+        progress_bar.update(1)
+
+
+    progress_bar.close()
+
+
+    # ---------- 4) Final cleanup: ensure d_joined only contains pairs we computed ----------
+    for i in range(n_nodes):
+        valid_js = [j for j in d_joined[i] if (i, j) in d_pixels]
+        d_joined[i] = valid_js
+
+
+    # ---------- 5) build t_pixels tensor (n_nodes, n_nodes, 2, max_pixels) ----------
+    if len(d_pixels) == 0:
+        # no pixels computed (unlikely) -> return empty tensor
+        t_pixels = t.zeros((n_nodes, n_nodes, 2, 0), dtype=t.int64)
+    else:
+        max_pixels = max([p.size(1) for p in d_pixels.values()])
+        t_pixels = t.zeros((n_nodes, n_nodes, 2, max_pixels), dtype=t.int64)
+        for (i, j), pixels in d_pixels.items():
+            L = pixels.size(1)
+            t_pixels[i, j, :, :L] = pixels
+
+
+    output = [d_coords, d_pixels, d_joined, d_sides, t_pixels]
+    return output
+
 
 
 # def node_distance(i: int, j: int, n_nodes: int, signed: bool = False) -> int | tuple[int, int]:
